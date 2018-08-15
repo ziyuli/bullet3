@@ -17,7 +17,7 @@ struct UrdfRenderingInterface
 	virtual void convertVisualShapes(int linkIndex, const char* pathPrefix, const btTransform& localInertiaFrame, const UrdfLink* linkPtr, const UrdfModel* model, int collisionObjectUid, int bodyUniqueId) =0;
 	
 	///remove a visual shapes, based on the shape unique id (shapeUid)
-	virtual void removeVisualShape(int collisionObjectUid)=0;
+	virtual void removeVisualShape(int collisionObjectUid, int bodyUid)=0;
 	
 	///update the world transform + scaling of the visual shape, using the shapeUid
 	virtual void syncTransform(int collisionObjectUid, const class btTransform& worldTransform, const class btVector3& localScaling)=0;

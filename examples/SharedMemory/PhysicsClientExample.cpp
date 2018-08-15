@@ -246,6 +246,26 @@ void PhysicsClientExample::prepareAndSubmitCommand(int commandId)
     
     switch (commandId)
     {
+        case CMD_LOAD_OBJ:
+        {
+            printf("Load OBJ");
+            b3SharedMemoryCommandHandle commandHandle = b3LoadObjCommandInit(m_physicsClientHandle, "cube.obj");
+            
+            double startPosX = 0;
+            double startPosY = 0;
+            double startPosZ = 2;
+            
+            double startSclX = 5;
+            double startSclY = 0.2;
+            double startSclZ = 5;
+            
+            b3LoadObjCommandSetStartPosition(commandHandle, startPosX,startPosY,startPosZ);
+            b3LoadObjCommandSetStartScale(commandHandle, startSclX, startSclY, startSclZ);
+            b3SubmitClientCommand(m_physicsClientHandle, commandHandle);
+            break;
+        }
+            
+            
         case  CMD_LOAD_URDF:
         {
             b3SharedMemoryCommandHandle commandHandle = b3LoadUrdfCommandInit(m_physicsClientHandle, "kuka_iiwa/model.urdf");
@@ -615,6 +635,7 @@ void	PhysicsClientExample::createButtons()
     {
 		m_guiHelper->getParameterInterface()->removeAllParameters();
 
+        createButton("Load OBJ", CMD_LOAD_OBJ, isTrigger);
         createButton("Load URDF",CMD_LOAD_URDF,  isTrigger);
         createButton("Load SDF",CMD_LOAD_SDF,  isTrigger);
 		createButton("Save World",CMD_SAVE_WORLD,  isTrigger);
@@ -742,6 +763,7 @@ void	PhysicsClientExample::initPhysics()
 		
 	} else
 	{
+        MyCallback(CMD_LOAD_OBJ, true, this);
         MyCallback(CMD_LOAD_URDF, true, this);
         MyCallback(CMD_STEP_FORWARD_SIMULATION,true,this);
         

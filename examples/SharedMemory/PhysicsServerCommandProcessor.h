@@ -21,11 +21,12 @@ class PhysicsServerCommandProcessor : public CommandProcessorInterface
 	struct PhysicsServerCommandProcessorInternalData* m_data;
 
 	void resetSimulation();
-	void createThreadPool();
+	void createTaskScheduler();
 
 protected:
 
 
+    bool processLoadOBJCommand(const struct SharedMemoryCommand& clientCmd, struct SharedMemoryStatus& serverStatusOut, char* bufferServerToClient, int bufferSizeInBytes);
 	bool processStateLoggingCommand(const struct SharedMemoryCommand& clientCmd, struct SharedMemoryStatus& serverStatusOut, char* bufferServerToClient, int bufferSizeInBytes);
 	bool processRequestCameraImageCommand(const struct SharedMemoryCommand& clientCmd, struct SharedMemoryStatus& serverStatusOut, char* bufferServerToClient, int bufferSizeInBytes);
 	bool processSaveWorldCommand(const struct SharedMemoryCommand& clientCmd, struct SharedMemoryStatus& serverStatusOut, char* bufferServerToClient, int bufferSizeInBytes);
@@ -95,6 +96,9 @@ protected:
 
 	bool loadUrdf(const char* fileName, const class btVector3& pos, const class btQuaternion& orn,
 		bool useMultiBody, bool useFixedBase, int* bodyUniqueIdPtr, char* bufferServerToClient, int bufferSizeInBytes, int flags, btScalar globalScaling);
+    
+    bool loadObj(const char* fileName, const class btVector3& pos, const class btQuaternion& orn, const class btVector3& scl,
+        int* bodyUniqueIdPtr, char* bufferServerToClient, int bufferSizeInBytes, int flags);
 
 	bool loadMjcf(const char* fileName, char* bufferServerToClient, int bufferSizeInBytes, bool useMultiBody, int flags);
 

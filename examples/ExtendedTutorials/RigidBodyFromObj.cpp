@@ -88,7 +88,7 @@ void RigidBodyFromObjExample::initPhysics()
 	const GLInstanceVertex& v = glmesh->m_vertices->at(0);
 	btConvexHullShape* shape = new btConvexHullShape((const btScalar*)(&(v.xyzw[0])), glmesh->m_numvertices, sizeof(GLInstanceVertex));
 
-	float scaling[4] = {0.1,0.1,0.1,1};
+	float scaling[4] = {0.1,0.3,0.1,1};
 	
 	btVector3 localScaling(scaling[0],scaling[1],scaling[2]);
 	shape->setLocalScaling(localScaling);

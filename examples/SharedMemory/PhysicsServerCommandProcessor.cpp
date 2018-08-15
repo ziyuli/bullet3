@@ -44,7 +44,7 @@
 #include "b3PluginManager.h"
 #include "../Extras/Serialize/BulletFileLoader/btBulletFile.h"
 #include "BulletCollision/NarrowPhaseCollision/btRaycastCallback.h"
-#include "LinearMath/TaskScheduler/btThreadSupportInterface.h"
+//#include "../Importers/ImportObjDemo/BulletObjImporter.h"
 
 #ifndef SKIP_STATIC_PD_CONTROL_PLUGIN
 #include "plugins/pdControlPlugin/pdControlPlugin.h"
@@ -109,47 +109,6 @@ struct UrdfLinkNameMapUtil
 	}
 };
 
-
-class b3ThreadPool {
-public:
-	b3ThreadPool(const char *name = "b3ThreadPool") {
-		btThreadSupportInterface::ConstructionInfo info(name, threadFunction);
-		m_threadSupportInterface = btThreadSupportInterface::create(info);
-	}
-
-	~b3ThreadPool() {
-		delete m_threadSupportInterface;
-	}
-
-	const int numWorkers() const { return m_threadSupportInterface->getNumWorkerThreads(); }
-
-	void runTask(int threadIdx, btThreadSupportInterface::ThreadFunc func, void *arg) {
-		FunctionContext& ctx = m_functionContexts[threadIdx];
-		ctx.func = func;
-		ctx.arg = arg;
-		m_threadSupportInterface->runTask(threadIdx, (void *)&ctx);
-	}
-
-	void waitForAllTasks() {
-		BT_PROFILE("b3ThreadPool_waitForAllTasks");
-		m_threadSupportInterface->waitForAllTasks();
-	}
-
-private:
-	struct FunctionContext {
-		btThreadSupportInterface::ThreadFunc func;
-		void *arg;
-	};
-
-	static void threadFunction(void *userPtr) {
-		BT_PROFILE("b3ThreadPool_threadFunction");
-		FunctionContext* ctx = (FunctionContext *)userPtr;
-		ctx->func(ctx->arg);
-	}
-
-	btThreadSupportInterface *m_threadSupportInterface;
-	FunctionContext m_functionContexts[BT_MAX_THREAD_COUNT];
-};
 
 struct SharedMemoryDebugDrawer : public btIDebugDraw
 {
@@ -222,6 +181,72 @@ struct InternalCollisionShapeData
 
 #include "SharedMemoryUserData.h"
 
+/**
+ * Holds all custom user data entries for a link.
+ */
+struct InternalLinkUserData {
+	// Used to look up user data entry handles for string keys.
+	btHashMap<btHashString, int> m_keyToHandleMap;
+	b3ResizablePool<b3PoolBodyHandle<SharedMemoryUserData> > m_userData;
+
+	// Adds or replaces a user data entry. 
+	// Returns the user data handle.
+	const int add(const char* key, const char* bytes, int len, int type) 
+	{
+		// If an entry with the key already exists, just update the value.
+		int userDataId = getUserDataId(key);
+		if (userDataId != -1) {
+			SharedMemoryUserData* userData = m_userData.getHandle(userDataId);
+			b3Assert(userData);
+			userData->replaceValue(bytes, len, type);
+			return userDataId;
+		}
+
+		userDataId = m_userData.allocHandle();
+		SharedMemoryUserData* userData = m_userData.getHandle(userDataId);
+		userData->m_key = key;
+		userData->replaceValue(bytes, len, type);
+		m_keyToHandleMap.insert(userData->m_key.c_str(), userDataId);
+		return userDataId;
+	}
+
+	// Returns the user data handle for a specified key or -1 if not found.
+	const int getUserDataId(const char* key) const 
+	{
+		const int* userDataIdPtr = m_keyToHandleMap.find(key);
+		if (userDataIdPtr) 
+		{
+			return *userDataIdPtr;
+		}
+		return -1;
+	}
+
+	// Removes a user data entry given the handle.
+	// Returns true when the entry was removed, false otherwise.
+	const bool remove(int userDataId) 
+	{
+		const SharedMemoryUserData* userData = m_userData.getHandle(userDataId);
+		if (!userData) 
+		{
+			return false;
+		}
+		m_keyToHandleMap.remove(userData->m_key.c_str());
+		m_userData.freeHandle(userDataId);
+		return true;
+	}
+
+	// Returns the user data given the user data id. null otherwise.
+	const SharedMemoryUserData* getUserData(const int userDataId) const 
+	{
+	    return m_userData.getHandle(userDataId);
+	}
+
+	void getUserDataIds(b3AlignedObjectArray<int> &userDataIds) const 
+	{
+		m_userData.getUsedHandles(userDataIds);
+	}
+};
+
 struct InternalBodyData
 {
 	btMultiBody* m_multiBody;
@@ -237,7 +262,7 @@ struct InternalBodyData
 	btAlignedObjectArray<btGeneric6DofSpring2Constraint*> m_rigidBodyJoints;
 	btAlignedObjectArray<std::string> m_rigidBodyJointNames;
 	btAlignedObjectArray<std::string> m_rigidBodyLinkNames;
-	btAlignedObjectArray<int> m_userDataHandles;
+	btHashMap<btHashInt, InternalLinkUserData*> m_linkUserDataMap;
 	
 #ifdef B3_ENABLE_TINY_AUDIO
 	b3HashMap<btHashInt, SDFAudioSource> m_audioSources;
@@ -262,7 +287,10 @@ struct InternalBodyData
 		m_rigidBodyJoints.clear();
 		m_rigidBodyJointNames.clear();
 		m_rigidBodyLinkNames.clear();
-		m_userDataHandles.clear();
+		for(int i=0; i<m_linkUserDataMap.size(); i++) {
+			delete *m_linkUserDataMap.getAtIndex(i);
+		}
+		m_linkUserDataMap.clear();
 	}
 
 };
@@ -596,6 +624,18 @@ struct CommandLogPlayback
 					result=true;
 					break;
 				}
+                    case CMD_LOAD_OBJ:
+                    {
+#ifdef BACKWARD_COMPAT
+                        cmd->m_objArguments = unused.m_objArguments;
+#else
+                        s = fread(&cmd->m_updateFlags,sizeof(int),1,m_file);
+                        s = fread(&cmd->m_objArguments,sizeof(ObjArgs),1,m_file);
+#endif
+                        result=true;
+                        break;
+                    }
+                        
 				 case CMD_LOAD_URDF:
                 {
 #ifdef BACKWARD_COMPAT
@@ -1538,8 +1578,8 @@ struct PhysicsServerCommandProcessorInternalData
 	b3ResizablePool< InternalBodyHandle > m_bodyHandles;
 	b3ResizablePool<InternalCollisionShapeHandle> m_userCollisionShapeHandles;
 	b3ResizablePool<InternalVisualShapeHandle> m_userVisualShapeHandles;
-	b3ResizablePool<b3PoolBodyHandle<SharedMemoryUserData> > m_userDataHandles;
-	btHashMap<SharedMemoryUserDataHashKey, int> m_userDataHandleLookup;
+
+
 
 	b3PluginManager m_pluginManager;
 
@@ -1632,7 +1672,7 @@ struct PhysicsServerCommandProcessorInternalData
 	b3HashMap<b3HashString,  char*> m_profileEvents;
 	b3HashMap<b3HashString, UrdfVisualShapeCache> m_cachedVUrdfisualShapes;
 
-	b3ThreadPool* m_threadPool;
+	btITaskScheduler* m_scheduler;
 
 	PhysicsServerCommandProcessorInternalData(PhysicsCommandProcessorInterface* proc)
 		:m_pluginManager(proc),
@@ -1662,7 +1702,7 @@ struct PhysicsServerCommandProcessorInternalData
 		m_pickedConstraint(0),
 		m_pickingMultiBodyPoint2Point(0),
 		m_pdControlPlugin(-1),
-		m_threadPool(0)
+		m_scheduler(0)
 	{
 
 		{
@@ -1771,8 +1811,8 @@ PhysicsServerCommandProcessor::~PhysicsServerCommandProcessor()
 		char* event = *m_data->m_profileEvents.getAtIndex(i);
 		delete[] event;
 	}
-	if (m_data->m_threadPool)
-		delete m_data->m_threadPool;
+	if (m_data->m_scheduler)
+		delete m_data->m_scheduler;
 
 	delete m_data;
 }
@@ -1942,6 +1982,12 @@ struct ProgrammaticUrdfInterface : public URDFImporterInterface
 	{
 
 	}
+    
+    virtual bool loadOBJ(const char* fileName, bool forceFixedBase = false)
+    {
+        b3Assert(0);
+        return false;
+    }
 
 	 virtual bool loadURDF(const char* fileName, bool forceFixedBase = false)
 	 {
@@ -2650,8 +2696,7 @@ bool PhysicsServerCommandProcessor::processImportedObjects(const char* fileName,
 	SaveWorldObjectData sd;
 	sd.m_fileName = fileName;
 
-    int currentOpenGLTextureIndex = 0;
-    
+
     for (int m =0; m<u2b.getNumModels();m++)
     {
 
@@ -2817,44 +2862,6 @@ bool PhysicsServerCommandProcessor::processImportedObjects(const char* fileName,
 			}
 		}
 
-        {
-            int startShapeIndex = 0;
-            
-            if (m_data->m_pluginManager.getRenderInterface())
-            {
-                int totalNumVisualShapes = m_data->m_pluginManager.getRenderInterface()->getNumVisualShapes(bodyUniqueId);
-                //int totalBytesPerVisualShape = sizeof (b3VisualShapeData);
-                //int visualShapeStorage = bufferSizeInBytes / totalBytesPerVisualShape - 1;
-                b3VisualShapeData tmpShape;
-                
-                int remain = totalNumVisualShapes - startShapeIndex;
-                int shapeIndex = startShapeIndex;
-                
-                int success = m_data->m_pluginManager.getRenderInterface()->getVisualShapesData(bodyUniqueId,shapeIndex,&tmpShape);
-                if (success)
-                {
-                    if (tmpShape.m_tinyRendererTextureId>=0)
-                    {
-                        int openglTextureUniqueId = -1;
-                        
-                        //find companion opengl texture unique id and create a 'textureUid'
-                        if (currentOpenGLTextureIndex<u2b.getNumAllocatedTextures())
-                        {
-                            openglTextureUniqueId  = u2b.getAllocatedTexture(currentOpenGLTextureIndex);
-                            currentOpenGLTextureIndex++;
-                        }
-
-                        int texHandle = m_data->m_textureHandles.allocHandle();
-                        InternalTextureHandle* texH = m_data->m_textureHandles.getHandle(texHandle);
-                        if(texH)
-                        {
-                            texH->m_tinyRendererTextureId = tmpShape.m_tinyRendererTextureId;
-                            texH->m_openglTextureId = openglTextureUniqueId;
-                        }
-                    }
-                }
-            }
-        }
     }
 
 	
@@ -2863,16 +2870,8 @@ bool PhysicsServerCommandProcessor::processImportedObjects(const char* fileName,
 		int texId = u2b.getAllocatedTexture(i);
 		m_data->m_allocatedTextures.push_back(texId);
 	}
+		
 
-    
-/*
- int texHandle = m_data->m_textureHandles.allocHandle();
- InternalTextureHandle* texH = m_data->m_textureHandles.getHandle(texHandle);
- if(texH)
- {
- texH->m_tinyRendererTextureId = -1;
- texH->m_openglTextureId = -1;
- */
 
 	for (int i=0;i<u2b.getNumAllocatedMeshInterfaces();i++)
 	{
@@ -2973,7 +2972,188 @@ bool PhysicsServerCommandProcessor::loadSdf(const char* fileName, char* bufferSe
 }
 
 
+bool PhysicsServerCommandProcessor::loadObj(const char* fileName, const btVector3& pos, const btQuaternion& orn, const btVector3& scl, int* bodyUniqueIdPtr, char* bufferServerToClient, int bufferSizeInBytes, int flags)
+{
+    *bodyUniqueIdPtr = -1;
+    
+    BT_PROFILE("loadObj");
+    btAssert(m_data->m_dynamicsWorld);
+    if (!m_data->m_dynamicsWorld)
+    {
+        b3Error("loadObj: No valid m_dynamicsWorld");
+        return false;
+    }
 
+
+    if(flags == FORCE_CONCAVE)
+    {
+
+    	btTransform rootTrans;
+        rootTrans.setOrigin(pos);
+        rootTrans.setRotation(orn);
+
+        btVector3 meshScale = scl;
+
+        SaveWorldObjectData sd;
+        sd.m_fileName = fileName;
+
+        GLInstanceGraphicsShape* glmesh = 0;
+        glmesh = LoadMeshFromObj(fileName, "");
+
+        btCompoundShape* compound = new btCompoundShape();
+
+        if(glmesh && glmesh->m_numvertices > 0)
+        {
+        	btAlignedObjectArray<btVector3> convertedVerts;
+			convertedVerts.reserve(glmesh->m_numvertices);
+
+			for (int v = 0; v < glmesh->m_numvertices; v++)
+			{
+				convertedVerts.push_back(btVector3(
+					glmesh->m_vertices->at(v).xyzw[0] * meshScale[0],
+					glmesh->m_vertices->at(v).xyzw[1] * meshScale[1],
+					glmesh->m_vertices->at(v).xyzw[2] * meshScale[2]));
+			}
+
+			btTriangleMesh* meshInterface = new btTriangleMesh();
+			this->m_data->m_meshInterfaces.push_back(meshInterface);
+			{
+				for (int i = 0; i < glmesh->m_numIndices / 3; i++)
+				{
+					const btVector3& v0 = convertedVerts[glmesh->m_indices->at(i * 3)];
+					const btVector3& v1 = convertedVerts[glmesh->m_indices->at(i * 3 + 1)];
+					const btVector3& v2 = convertedVerts[glmesh->m_indices->at(i * 3 + 2)];
+					meshInterface->addTriangle(v0, v1, v2);
+				}
+			}
+
+			{
+				btBvhTriangleMeshShape* trimesh = new btBvhTriangleMeshShape(meshInterface, true, true);
+				m_data->m_collisionShapes.push_back(trimesh);
+
+				// if (clientCmd.m_createUserShapeArgs.m_shapes[i].m_collisionFlags & GEOM_CONCAVE_INTERNAL_EDGE)
+				// {
+				// 	btTriangleInfoMap* triangleInfoMap = new btTriangleInfoMap();
+				// 	btGenerateInternalEdgeInfo(trimesh, triangleInfoMap);
+				// }
+				//trimesh->setLocalScaling(collision->m_geometry.m_meshScale);
+				//shape = trimesh;
+
+				// btTriangleInfoMap* triangleInfoMap = new btTriangleInfoMap();
+				// btGenerateInternalEdgeInfo(trimesh, triangleInfoMap);
+
+				if (compound)
+				{
+					btTransform childTrans;
+					childTrans.setIdentity();
+					compound->addChildShape(childTrans, trimesh);
+					m_data->m_collisionShapes.push_back(compound);
+				}
+			}
+			delete glmesh;
+
+
+			btRigidBody * rb = 0;
+        
+	        //get a body index
+	        int bodyUniqueId = m_data->m_bodyHandles.allocHandle();
+	        InternalBodyHandle * bodyHandle = m_data->m_bodyHandles.getHandle(bodyUniqueId);
+	        sd.m_bodyUniqueIds.push_back(bodyUniqueId);
+
+	        btScalar mass = 0;
+	        btVector3 localInertiaDiagonal(0,0,0);
+
+	        btRigidBody::btRigidBodyConstructionInfo rbci(mass, 0, compound, localInertiaDiagonal);
+	        rbci.m_startWorldTransform = rootTrans;
+	        rb = new btRigidBody(rbci);
+	        m_data->m_dynamicsWorld->addRigidBody(rb);
+        
+	        rb->setUserIndex2(bodyUniqueId);
+	        bodyHandle->m_rigidBody = rb;
+	        
+	        std::string * name = new std::string("Obj");
+	        m_data->m_strings.push_back(name);
+	        bodyHandle->m_bodyName = *name;
+	        
+	        m_data->m_saveWorldBodyData.push_back(sd);
+	        
+	        *bodyUniqueIdPtr = bodyUniqueId;
+
+	        return true;
+        }
+        return false;
+    }
+    else
+    {
+    	BulletOBJImporter o2b = BulletOBJImporter(flags);   
+    	bool loadOk = o2b.loadOBJMesh(fileName, scl); // scale
+
+    	if(loadOk)
+    	{
+    		btTransform rootTrans;
+	        rootTrans.setOrigin(pos);
+	        rootTrans.setRotation(orn);
+	        o2b.setRootTransformInWorld(rootTrans); // TODO z. li
+	        
+	        SaveWorldObjectData sd;
+	        sd.m_fileName = fileName;
+	        
+	        btRigidBody * rb = 0;
+	        
+	        //get a body index
+	        int bodyUniqueId = m_data->m_bodyHandles.allocHandle();
+	        InternalBodyHandle * bodyHandle = m_data->m_bodyHandles.getHandle(bodyUniqueId);
+	        sd.m_bodyUniqueIds.push_back(bodyUniqueId);
+	        
+	        o2b.setBodyUniqueId(bodyUniqueId);
+	        {
+	            bodyHandle->m_rootLocalInertialFrame.setIdentity();
+	            bodyHandle->m_bodyName = o2b.getBodyName();
+	        }
+	        
+	        btScalar mass = 0;
+	        btVector3 localInertiaDiagonal(0,0,0);
+
+	        o2b.getMassAndInertia2(-1, mass,localInertiaDiagonal,bodyHandle->m_rootLocalInertialFrame,0);
+
+	        btRigidBody::btRigidBodyConstructionInfo rbci(mass, 0, o2b.getCollisionShape(), localInertiaDiagonal);
+	        rbci.m_startWorldTransform = rootTrans;
+	        rb = new btRigidBody(rbci);
+	        //rb->forceActivationState(DISABLE_DEACTIVATION);
+
+	        m_data->m_dynamicsWorld->addRigidBody(rb);
+	        
+	        rb->setUserIndex2(bodyUniqueId);
+	        bodyHandle->m_rigidBody = rb;
+	        
+	        std::string * name = new std::string("Obj");
+	        m_data->m_strings.push_back(name);
+	        bodyHandle->m_bodyName = *name;
+	        
+	        m_data->m_saveWorldBodyData.push_back(sd);
+	        
+	        *bodyUniqueIdPtr = bodyUniqueId;
+	        
+
+	        btCollisionShape* shape = o2b.getCollisionShape();
+	        if(shape->getShapeType() == COMPOUND_SHAPE_PROXYTYPE)
+	        {
+	        	btCompoundShape* compound = (btCompoundShape*)shape;
+				for (int c = 0; c < compound->getNumChildShapes(); c++)
+				{
+					btCollisionShape* childShape = compound->getChildShape(c);
+					m_data->m_collisionShapes.push_back(childShape);
+				}
+	        }
+	        m_data->m_collisionShapes.push_back(shape);
+
+	        return true;
+    	}
+    	return false;
+    }
+
+    return false;
+}
 
 bool PhysicsServerCommandProcessor::loadUrdf(const char* fileName, const btVector3& pos, const btQuaternion& orn,
                              bool useMultiBody, bool useFixedBase, int* bodyUniqueIdPtr, char* bufferServerToClient, int bufferSizeInBytes, int flags, btScalar globalScaling)
@@ -4744,17 +4924,16 @@ struct CastSyncInfo {
 };
 #endif // __cplusplus >= 201103L
 
-struct BatchRayCaster
+struct BatchRayCaster : public btIParallelForBody
 {
-	b3ThreadPool* m_threadPool;
 	CastSyncInfo *m_syncInfo;
 	const btCollisionWorld *m_world;
 	const b3RayData *m_rayInputBuffer;
 	b3RayHitInfo *m_hitInfoOutputBuffer;
 	int m_numRays;
 
-	BatchRayCaster(b3ThreadPool *threadPool, const btCollisionWorld* world, const b3RayData *rayInputBuffer, b3RayHitInfo *hitInfoOutputBuffer, int numRays)
-		: m_threadPool(threadPool), m_world(world), m_rayInputBuffer(rayInputBuffer), m_hitInfoOutputBuffer(hitInfoOutputBuffer), m_numRays(numRays) {
+	BatchRayCaster(const btCollisionWorld* world, const b3RayData *rayInputBuffer, b3RayHitInfo *hitInfoOutputBuffer, int numRays)
+		: m_world(world), m_rayInputBuffer(rayInputBuffer), m_hitInfoOutputBuffer(hitInfoOutputBuffer), m_numRays(numRays) {
 		m_syncInfo = new CastSyncInfo;
 	}
 
@@ -4764,49 +4943,25 @@ struct BatchRayCaster
 
 	void castRays(int numWorkers) {
 #if BT_THREADSAFE
-		if (numWorkers <= 1) {
-			castSequentially();
-		}
-		else {
-			{
-				BT_PROFILE("BatchRayCaster_startingWorkerThreads");
-				int numTasks = btMin(m_threadPool->numWorkers(), numWorkers-1);
-				for (int i=0;i<numTasks;i++) {
-					m_threadPool->runTask(i, BatchRayCaster::rayCastWorker, this);
-				}
-			}
-			rayCastWorker(this);
-			m_threadPool->waitForAllTasks();
-		}
+		btParallelFor(0, numWorkers, 1, *this);
 #else // BT_THREADSAFE
-		castSequentially();
-#endif // BT_THREADSAFE
-	}
-
-	static void rayCastWorker(void *arg) {
-		BT_PROFILE("BatchRayCaster_raycastWorker");
-		BatchRayCaster *const obj = (BatchRayCaster *)arg;
-		const int numRays = obj->m_numRays;
-		int taskNr;
-		while(true) {
-			{
-				BT_PROFILE("CastSyncInfo_getNextTask");
-				taskNr = obj->m_syncInfo->getNextTask();
-			}
-			if (taskNr >= numRays)
-				return;
-			obj->processRay(taskNr);
-		}
-	}
-
-	void castSequentially() {
 		for (int i = 0; i < m_numRays; i++) {
 			processRay(i);
 		}
+#endif // BT_THREADSAFE
 	}
 
-	void processRay(int ray) {
-		BT_PROFILE("BatchRayCaster_processRay");
+	void forLoop( int iBegin, int iEnd ) const
+	{
+		while(true) {
+			const int taskNr = m_syncInfo->getNextTask();
+			if (taskNr >= m_numRays)
+				return;
+			processRay(taskNr);
+		}
+	}
+
+	void processRay(int ray) const {
 		const double *from = m_rayInputBuffer[ray].m_rayFromPosition;
 		const double *to = m_rayInputBuffer[ray].m_rayToPosition;
 		btVector3 rayFromWorld(from[0], from[1], from[2]);
@@ -4864,11 +5019,15 @@ struct BatchRayCaster
 	}
 };
 
-void PhysicsServerCommandProcessor::createThreadPool()
+void PhysicsServerCommandProcessor::createTaskScheduler()
 {
 #ifdef BT_THREADSAFE
-	if (m_data->m_threadPool == 0) {
-		m_data->m_threadPool = new b3ThreadPool("PhysicsServerCommandProcessorThreadPool");
+	if (btGetTaskScheduler() == 0) {
+		m_data->m_scheduler = btCreateDefaultTaskScheduler();
+		if (m_data->m_scheduler == 0) {
+			m_data->m_scheduler = btGetSequentialTaskScheduler();
+		}
+		btSetTaskScheduler(m_data->m_scheduler);
 	}
 #endif //BT_THREADSAFE
 }
@@ -4881,17 +5040,9 @@ bool PhysicsServerCommandProcessor::processRequestRaycastIntersectionsCommand(co
 
 	const int numCommandRays = clientCmd.m_requestRaycastIntersections.m_numCommandRays;
 	const int numStreamingRays = clientCmd.m_requestRaycastIntersections.m_numStreamingRays;
-	const int totalRays = numCommandRays+numStreamingRays;
-	int numThreads = clientCmd.m_requestRaycastIntersections.m_numThreads;
-	if (numThreads == 0) {
-		// When 0 is specified, Bullet can decide how many threads to use.
-		// About 16 rays per thread seems to work reasonably well.
-		numThreads = btMax(1, totalRays / 16);
-	}
-	if (numThreads > 1) {
-		createThreadPool();
-	}
+	const int numThreads = clientCmd.m_requestRaycastIntersections.m_numThreads;
 
+	int totalRays = numCommandRays+numStreamingRays;
 	btAlignedObjectArray<b3RayData> rays;
 	rays.resize(totalRays);
 	if (numCommandRays)
@@ -4903,8 +5054,24 @@ bool PhysicsServerCommandProcessor::processRequestRaycastIntersectionsCommand(co
 		memcpy(&rays[numCommandRays],bufferServerToClient,numStreamingRays*sizeof(b3RayData));
 	}
 	
-	BatchRayCaster batchRayCaster(m_data->m_threadPool, m_data->m_dynamicsWorld, &rays[0], (b3RayHitInfo *)bufferServerToClient, totalRays);
-	batchRayCaster.castRays(numThreads);
+	BatchRayCaster batchRayCaster(m_data->m_dynamicsWorld, &rays[0], (b3RayHitInfo *)bufferServerToClient, totalRays);
+	if (numThreads == 0) {
+		createTaskScheduler();
+		// When 0 is specified, Bullet can decide how many threads to use.
+		// About 16 rays per thread seems to work reasonably well.
+		batchRayCaster.castRays(totalRays / 16);
+	} else if (numThreads == 1) {
+		// Sequentially trace all rays:
+		for (int i = 0; i < totalRays; i++) {
+			batchRayCaster.processRay(i);
+		}
+	} else {
+		
+		// Otherwise, just use the user-specified number of threads. This is
+		// still limited by the number of virtual cores on the machine.
+		createTaskScheduler();
+		batchRayCaster.castRays(numThreads);
+	}
 
 	serverStatusOut.m_raycastHits.m_numRaycastHits = totalRays;
 	serverStatusOut.m_type = CMD_REQUEST_RAY_CAST_INTERSECTIONS_COMPLETED;
@@ -5020,11 +5187,34 @@ bool PhysicsServerCommandProcessor::processSyncUserDataCommand(const struct Shar
 	bool hasStatus = true;
 	BT_PROFILE("CMD_SYNC_USER_DATA");
 
-	b3AlignedObjectArray<int> userDataHandles;
-	m_data->m_userDataHandles.getUsedHandles(userDataHandles);
-	memcpy(bufferServerToClient, &userDataHandles[0], sizeof(int) * userDataHandles.size());
+	b3UserDataGlobalIdentifier *userDataIdentifiers = (b3UserDataGlobalIdentifier *)bufferServerToClient;
+	int numIdentifiers = 0;
+	b3AlignedObjectArray<int> bodyHandles;
+	m_data->m_bodyHandles.getUsedHandles(bodyHandles);
+	for (int i=0; i<bodyHandles.size(); i++) {
+		int bodyHandle = bodyHandles[i];
+		InternalBodyData* body = m_data->m_bodyHandles.getHandle(bodyHandle);
+		if (!body) {
+			continue;
+		}
+		for (int j=0; j<body->m_linkUserDataMap.size(); j++) {
+			const int linkIndex = body->m_linkUserDataMap.getKeyAtIndex(j).getUid1();
+			InternalLinkUserData **userDataPtr = body->m_linkUserDataMap.getAtIndex(j);
+			if (!userDataPtr) {
+				continue;
+			}
+			b3AlignedObjectArray<int> userDataIds;
+			(*userDataPtr)->getUserDataIds(userDataIds);
+			for (int k=0; k<userDataIds.size(); k++) {
+				b3UserDataGlobalIdentifier &identifier = userDataIdentifiers[numIdentifiers++];
+				identifier.m_bodyUniqueId = bodyHandle;
+				identifier.m_linkIndex = linkIndex;
+				identifier.m_userDataId = userDataIds[k];
+			}
+		}
+	}
 
-	serverStatusOut.m_syncUserDataArgs.m_numUserDataIdentifiers = userDataHandles.size();
+	serverStatusOut.m_syncUserDataArgs.m_numUserDataIdentifiers = numIdentifiers;
 	serverStatusOut.m_type = CMD_SYNC_USER_DATA_COMPLETED;
 	return hasStatus;
 }
@@ -5035,16 +5225,21 @@ bool PhysicsServerCommandProcessor::processRequestUserDataCommand(const struct S
 	BT_PROFILE("CMD_REQUEST_USER_DATA");
 	serverStatusOut.m_type = CMD_REQUEST_USER_DATA_FAILED;
 
-	SharedMemoryUserData *userData = m_data->m_userDataHandles.getHandle(clientCmd.m_userDataRequestArgs.m_userDataId);
+	InternalBodyData *body = m_data->m_bodyHandles.getHandle(clientCmd.m_userDataRequestArgs.m_bodyUniqueId);
+	if (!body) {
+		return hasStatus;
+	}
+	const int linkIndex = clientCmd.m_userDataRequestArgs.m_linkIndex;
+	InternalLinkUserData **userDataPtr = body->m_linkUserDataMap[linkIndex];
+	if (!userDataPtr) {
+		return hasStatus;
+	}
+	const SharedMemoryUserData *userData = (*userDataPtr)->getUserData(clientCmd.m_userDataRequestArgs.m_userDataId);
 	if (!userData) {
 		return hasStatus;
 	}
-
-	btAssert(bufferSizeInBytes >= userData->m_bytes.size());
-	serverStatusOut.m_userDataResponseArgs.m_userDataId = clientCmd.m_userDataRequestArgs.m_userDataId;
-	serverStatusOut.m_userDataResponseArgs.m_bodyUniqueId = userData->m_bodyUniqueId;
-	serverStatusOut.m_userDataResponseArgs.m_linkIndex = userData->m_linkIndex;
-	serverStatusOut.m_userDataResponseArgs.m_visualShapeIndex = userData->m_visualShapeIndex;
+    btAssert(bufferSizeInBytes >= userData->m_bytes.size());
+	serverStatusOut.m_userDataResponseArgs.m_userDataGlobalId = clientCmd.m_userDataRequestArgs;
 	serverStatusOut.m_userDataResponseArgs.m_valueType = userData->m_type;
 	serverStatusOut.m_userDataResponseArgs.m_valueLength = userData->m_bytes.size();
 	serverStatusOut.m_type = CMD_REQUEST_USER_DATA_COMPLETED;
@@ -5067,43 +5262,27 @@ bool PhysicsServerCommandProcessor::processAddUserDataCommand(const struct Share
 	{
 		return hasStatus;
 	}
-
+	
 	InternalBodyData *body = m_data->m_bodyHandles.getHandle(clientCmd.m_addUserDataRequestArgs.m_bodyUniqueId);
 	if (!body) {
 		return hasStatus;
 	}
-	
-	SharedMemoryUserDataHashKey userDataIdentifier(
-		clientCmd.m_addUserDataRequestArgs.m_key,
-		clientCmd.m_addUserDataRequestArgs.m_bodyUniqueId,
-		clientCmd.m_addUserDataRequestArgs.m_linkIndex,
-		clientCmd.m_addUserDataRequestArgs.m_visualShapeIndex);
-
-	int* userDataHandlePtr = m_data->m_userDataHandleLookup.find(userDataIdentifier);
-	int userDataHandle = userDataHandlePtr ? *userDataHandlePtr : m_data->m_userDataHandles.allocHandle();
-
-	SharedMemoryUserData *userData = m_data->m_userDataHandles.getHandle(userDataHandle);
-	if (!userData) {
-		return hasStatus;
+	const int linkIndex = clientCmd.m_addUserDataRequestArgs.m_linkIndex;
+	InternalLinkUserData **userDataPtr = body->m_linkUserDataMap[linkIndex];
+	if (!userDataPtr) {
+		InternalLinkUserData *userData = new InternalLinkUserData;
+		userDataPtr = &userData;
+		body->m_linkUserDataMap.insert(linkIndex, userData);
 	}
 
-	if (!userDataHandlePtr) {
-		userData->m_key = clientCmd.m_addUserDataRequestArgs.m_key;
-		userData->m_bodyUniqueId = clientCmd.m_addUserDataRequestArgs.m_bodyUniqueId;
-		userData->m_linkIndex = clientCmd.m_addUserDataRequestArgs.m_linkIndex;
-		userData->m_visualShapeIndex = clientCmd.m_addUserDataRequestArgs.m_visualShapeIndex;
-		m_data->m_userDataHandleLookup.insert(userDataIdentifier, userDataHandle);
-		body->m_userDataHandles.push_back(userDataHandle);
-	}
-	userData->replaceValue(bufferServerToClient,
-		clientCmd.m_addUserDataRequestArgs.m_valueLength,
+	const int userDataId = (*userDataPtr)->add(clientCmd.m_addUserDataRequestArgs.m_key,
+		 bufferServerToClient,clientCmd.m_addUserDataRequestArgs.m_valueLength,
 		clientCmd.m_addUserDataRequestArgs.m_valueType);
 
 	serverStatusOut.m_type = CMD_ADD_USER_DATA_COMPLETED;
-	serverStatusOut.m_userDataResponseArgs.m_userDataId = userDataHandle;
-	serverStatusOut.m_userDataResponseArgs.m_bodyUniqueId = clientCmd.m_addUserDataRequestArgs.m_bodyUniqueId;
-	serverStatusOut.m_userDataResponseArgs.m_linkIndex = clientCmd.m_addUserDataRequestArgs.m_linkIndex;
-	serverStatusOut.m_userDataResponseArgs.m_visualShapeIndex = clientCmd.m_addUserDataRequestArgs.m_visualShapeIndex;
+	serverStatusOut.m_userDataResponseArgs.m_userDataGlobalId.m_userDataId = userDataId;
+	serverStatusOut.m_userDataResponseArgs.m_userDataGlobalId.m_bodyUniqueId = clientCmd.m_addUserDataRequestArgs.m_bodyUniqueId;
+	serverStatusOut.m_userDataResponseArgs.m_userDataGlobalId.m_linkIndex = clientCmd.m_addUserDataRequestArgs.m_linkIndex;
 	serverStatusOut.m_userDataResponseArgs.m_valueLength = clientCmd.m_addUserDataRequestArgs.m_valueLength;
 	serverStatusOut.m_userDataResponseArgs.m_valueType = clientCmd.m_addUserDataRequestArgs.m_valueType;
 	strcpy(serverStatusOut.m_userDataResponseArgs.m_key, clientCmd.m_addUserDataRequestArgs.m_key);
@@ -5118,20 +5297,19 @@ bool PhysicsServerCommandProcessor::processRemoveUserDataCommand(const struct Sh
 	BT_PROFILE("CMD_REMOVE_USER_DATA");
 	serverStatusOut.m_type = CMD_REMOVE_USER_DATA_FAILED;
 
-	SharedMemoryUserData *userData = m_data->m_userDataHandles.getHandle(clientCmd.m_removeUserDataRequestArgs.m_userDataId);
-	if (!userData) {
-		return hasStatus;
-	}
-
-	InternalBodyData *body = m_data->m_bodyHandles.getHandle(userData->m_bodyUniqueId);
+	InternalBodyData *body = m_data->m_bodyHandles.getHandle(clientCmd.m_removeUserDataRequestArgs.m_bodyUniqueId);
 	if (!body) {
 		return hasStatus;
 	}
-	body->m_userDataHandles.remove(clientCmd.m_removeUserDataRequestArgs.m_userDataId);
-
-	m_data->m_userDataHandleLookup.remove(SharedMemoryUserDataHashKey(userData));
-	m_data->m_userDataHandles.freeHandle(clientCmd.m_removeUserDataRequestArgs.m_userDataId);
-
+	const int linkIndex = clientCmd.m_removeUserDataRequestArgs.m_linkIndex;
+	InternalLinkUserData **userDataPtr = body->m_linkUserDataMap[linkIndex];
+	if (!userDataPtr) {
+		return hasStatus;
+	}
+	const bool removed = (*userDataPtr)->remove(clientCmd.m_removeUserDataRequestArgs.m_userDataId);
+	if (!removed) {
+		return hasStatus;
+	}
 	serverStatusOut.m_removeUserDataResponseArgs = clientCmd.m_removeUserDataRequestArgs;
 	serverStatusOut.m_type = CMD_REMOVE_USER_DATA_COMPLETED;
 	return hasStatus;
@@ -5164,6 +5342,7 @@ bool PhysicsServerCommandProcessor::processSendDesiredStateCommand(const struct 
             }
             
 			b3PluginArguments args;
+            args.m_ints[0] = eSetPDControl;
             args.m_ints[1] = bodyUniqueId;
             //find the joint motors and apply the desired velocity and maximum force/torque
             {
@@ -5216,11 +5395,6 @@ bool PhysicsServerCommandProcessor::processSendDesiredStateCommand(const struct 
                             args.m_ints[2] = link;
                             args.m_numInts = 3;
                             args.m_numFloats = 5;
-                            
-                            args.m_ints[0] = eSetPDControl;
-                            if (args.m_floats[4] < B3_EPSILON) {
-                                args.m_ints[0] = eRemovePDControl;
-                            }
                             m_data->m_pluginManager.executePluginCommand(m_data->m_pdControlPlugin, &args);
                         }
                     }
@@ -5851,6 +6025,23 @@ bool PhysicsServerCommandProcessor::processRequestActualStateCommand(const struc
 			serverCmd.m_sendActualStateArgs.m_numDegreeOfFreedomQ = totalDegreeOfFreedomQ;
 			serverCmd.m_sendActualStateArgs.m_numDegreeOfFreedomU = totalDegreeOfFreedomU;
 
+			serverCmd.m_sendActualStateArgs.m_rootLocalInertialFrame[0] =
+                body->m_rootLocalInertialFrame.getOrigin()[0];
+            serverCmd.m_sendActualStateArgs.m_rootLocalInertialFrame[1] =
+                body->m_rootLocalInertialFrame.getOrigin()[1];
+            serverCmd.m_sendActualStateArgs.m_rootLocalInertialFrame[2] =
+                body->m_rootLocalInertialFrame.getOrigin()[2];
+
+            serverCmd.m_sendActualStateArgs.m_rootLocalInertialFrame[3] =
+                body->m_rootLocalInertialFrame.getRotation()[0];
+            serverCmd.m_sendActualStateArgs.m_rootLocalInertialFrame[4] =
+                body->m_rootLocalInertialFrame.getRotation()[1];
+            serverCmd.m_sendActualStateArgs.m_rootLocalInertialFrame[5] =
+                body->m_rootLocalInertialFrame.getRotation()[2];
+            serverCmd.m_sendActualStateArgs.m_rootLocalInertialFrame[6] =
+                body->m_rootLocalInertialFrame.getRotation()[3];
+
+
 			hasStatus = true;
 		} else
 		{
@@ -6323,6 +6514,74 @@ bool PhysicsServerCommandProcessor::processCreateMultiBodyCommand(const struct S
 		//ConvertURDF2Bullet(u2b,creation, rootTrans,m_data->m_dynamicsWorld,useMultiBody,u2b.getPathPrefix(),flags);
 	}
 	return hasStatus;
+}
+
+bool PhysicsServerCommandProcessor::processLoadOBJCommand(const struct SharedMemoryCommand& clientCmd, struct SharedMemoryStatus& serverStatusOut, char* bufferServerToClient, int bufferSizeInBytes)
+{
+    bool hasStatus = true;
+    serverStatusOut.m_type = CMD_OBJ_LOADING_FAILED;
+    
+    const ObjArgs& objArgs = clientCmd.m_objArguments;
+    if (m_data->m_verboseOutput)
+    {
+        b3Printf("Processed CMD_LOAD_OBJ:%s", objArgs.m_objFileName);
+    }
+    
+    btAssert((clientCmd.m_updateFlags&OBJ_ARGS_FILE_NAME) !=0);
+    btAssert(objArgs.m_objFileName);
+    
+    //printf("Load OBJ Cmd\n");
+    
+    btVector3 initialPos(0,0,0);
+    btQuaternion initialOrn(0,0,0,1);
+    btVector3 initialScl(1,1,1);
+    if (clientCmd.m_updateFlags & OBJ_ARGS_INITIAL_POSITION)
+    {
+        initialPos[0] = objArgs.m_initialPosition[0];
+        initialPos[1] = objArgs.m_initialPosition[1];
+        initialPos[2] = objArgs.m_initialPosition[2];
+    }
+    
+    int objFlags = 0;
+    if (clientCmd.m_updateFlags & OBJ_ARGS_HAS_CUSTOM_OBJ_FLAGS) {
+        objFlags = objArgs.m_objFlags;
+    }
+    
+    if (clientCmd.m_updateFlags & OBJ_ARGS_INITIAL_ORIENTATION) {
+        initialOrn[0] = objArgs.m_initialOrientation[0];
+        initialOrn[1] = objArgs.m_initialOrientation[1];
+        initialOrn[2] = objArgs.m_initialOrientation[2];
+        initialOrn[3] = objArgs.m_initialOrientation[3];
+    }
+    
+    if (clientCmd.m_updateFlags & OBJ_ARGS_INITIAL_SCALE) {
+        initialScl[0] = objArgs.m_initialScale[0];
+        initialScl[1] = objArgs.m_initialScale[1];
+        initialScl[2] = objArgs.m_initialScale[2];
+    }
+
+    //printf("objFlags: %d\n", objFlags);
+    
+    int bodyUniqueId;
+    bool completedOk = loadObj(objArgs.m_objFileName,
+                               initialPos,initialOrn,initialScl,
+                               &bodyUniqueId, bufferServerToClient, bufferSizeInBytes, objFlags);
+    
+    if (completedOk && bodyUniqueId>=0)
+    {
+        serverStatusOut.m_type = CMD_OBJ_LOADING_COMPLETED;
+        
+        int streamSizeInBytes = createBodyInfoStream(bodyUniqueId, bufferServerToClient, bufferSizeInBytes);
+        serverStatusOut.m_numDataStreamBytes = streamSizeInBytes;
+        
+        serverStatusOut.m_dataStreamArguments.m_bodyUniqueId = bodyUniqueId;
+        InternalBodyData* body = m_data->m_bodyHandles.getHandle(bodyUniqueId);
+        strcpy(serverStatusOut.m_dataStreamArguments.m_bodyName, body->m_bodyName.c_str());
+        
+        return true;
+    }
+    return false;
+    
 }
 
 
@@ -8194,12 +8453,17 @@ bool PhysicsServerCommandProcessor::processRemoveBodyCommand(const struct Shared
 				{
 					if (m_data->m_pluginManager.getRenderInterface())
 					{
-						m_data->m_pluginManager.getRenderInterface()->removeVisualShape(bodyHandle->m_multiBody->getBaseCollider()->getBroadphaseHandle()->getUid());
+						//bodyHandle->m_multiBody->getBaseCollider()->getBroadphaseHandle()->getUid(), 
+						m_data->m_pluginManager.getRenderInterface()->removeVisualShape(
+							bodyHandle->m_multiBody->getBaseCollider()->getBroadphaseHandle()->getUid(),
+							bodyUniqueId
+						);
 					}
 					m_data->m_dynamicsWorld->removeCollisionObject(bodyHandle->m_multiBody->getBaseCollider());
 					int graphicsIndex = bodyHandle->m_multiBody->getBaseCollider()->getUserIndex();
 					m_data->m_guiHelper->removeGraphicsInstance(graphicsIndex);
 				}
+
 				for (int link=0;link<bodyHandle->m_multiBody->getNumLinks();link++)
 				{
 									
@@ -8207,7 +8471,11 @@ bool PhysicsServerCommandProcessor::processRemoveBodyCommand(const struct Shared
 					{
 						if (m_data->m_pluginManager.getRenderInterface())
 						{
-							m_data->m_pluginManager.getRenderInterface()->removeVisualShape(bodyHandle->m_multiBody->getLink(link).m_collider->getBroadphaseHandle()->getUid());
+							//bodyHandle->m_multiBody->getLink(link).m_collider->getBroadphaseHandle()->getUid(),
+							m_data->m_pluginManager.getRenderInterface()->removeVisualShape(
+								bodyHandle->m_multiBody->getBaseCollider()->getBroadphaseHandle()->getUid(),
+								bodyUniqueId
+							);
 						}
 						m_data->m_dynamicsWorld->removeCollisionObject(bodyHandle->m_multiBody->getLink(link).m_collider);
 						int graphicsIndex = bodyHandle->m_multiBody->getLink(link).m_collider->getUserIndex();
@@ -8227,7 +8495,10 @@ bool PhysicsServerCommandProcessor::processRemoveBodyCommand(const struct Shared
 			{
 				if (m_data->m_pluginManager.getRenderInterface())
 				{
-					m_data->m_pluginManager.getRenderInterface()->removeVisualShape(bodyHandle->m_rigidBody->getBroadphaseHandle()->getUid());
+					m_data->m_pluginManager.getRenderInterface()->removeVisualShape(
+						bodyHandle->m_rigidBody->getBroadphaseHandle()->getUid(),
+						bodyUniqueId
+					);
 				}
 				serverCmd.m_removeObjectArgs.m_bodyUniqueIds[serverCmd.m_removeObjectArgs.m_numBodies++] = bodyUniqueId;
 				
@@ -8244,12 +8515,6 @@ bool PhysicsServerCommandProcessor::processRemoveBodyCommand(const struct Shared
 				delete bodyHandle->m_rigidBody;
 				bodyHandle->m_rigidBody=0;
 				serverCmd.m_type = CMD_REMOVE_BODY_COMPLETED;
-			}
-			for (int i=0; i < bodyHandle->m_userDataHandles.size(); i++) {
-				int userDataHandle = bodyHandle->m_userDataHandles[i];
-				SharedMemoryUserData *userData = m_data->m_userDataHandles.getHandle(userDataHandle);
-				m_data->m_userDataHandleLookup.remove(SharedMemoryUserDataHashKey(userData));
-				m_data->m_userDataHandles.freeHandle(userDataHandle);
 			}
 			m_data->m_bodyHandles.freeHandle(bodyUniqueId);
 		}
@@ -9245,10 +9510,14 @@ bool PhysicsServerCommandProcessor::processRequestVisualShapeInfoCommand(const s
                     
 	if (m_data->m_pluginManager.getRenderInterface())
 	{
+
 		int totalNumVisualShapes = m_data->m_pluginManager.getRenderInterface()->getNumVisualShapes(clientCmd.m_requestVisualShapeDataArguments.m_bodyUniqueId);
 		//int totalBytesPerVisualShape = sizeof (b3VisualShapeData);
 		//int visualShapeStorage = bufferSizeInBytes / totalBytesPerVisualShape - 1;
 		b3VisualShapeData* visualShapeStoragePtr = (b3VisualShapeData*)bufferServerToClient;
+
+		//printf("total vs %d\n", totalNumVisualShapes);
+
 
 		int remain = totalNumVisualShapes - clientCmd.m_requestVisualShapeDataArguments.m_startingVisualShapeIndex;
 		int shapeIndex = clientCmd.m_requestVisualShapeDataArguments.m_startingVisualShapeIndex;
@@ -9257,25 +9526,6 @@ bool PhysicsServerCommandProcessor::processRequestVisualShapeInfoCommand(const s
 			shapeIndex,
 			visualShapeStoragePtr);
 		if (success) {
-            
-            //find the matching texture unique ids.
-            if (visualShapeStoragePtr->m_tinyRendererTextureId>=0)
-            {
-                b3AlignedObjectArray<int> usedHandles;
-                m_data->m_textureHandles.getUsedHandles(usedHandles);
-                
-                for (int i=0;i<usedHandles.size();i++)
-                {
-                    int texHandle =usedHandles[i];
-                    InternalTextureHandle* texH = m_data->m_textureHandles.getHandle(texHandle);
-                    if (texH && (texH->m_tinyRendererTextureId == visualShapeStoragePtr->m_tinyRendererTextureId))
-                    {
-                        visualShapeStoragePtr->m_openglTextureId =texH->m_openglTextureId;
-                        visualShapeStoragePtr->m_textureUniqueId = texHandle;
-                    }
-                }
-            }
-            
 			serverCmd.m_sendVisualShapeArgs.m_numRemainingVisualShapes = remain-1;
 			serverCmd.m_sendVisualShapeArgs.m_numVisualShapesCopied = 1;
 			serverCmd.m_sendVisualShapeArgs.m_startingVisualShapeIndex = clientCmd.m_requestVisualShapeDataArguments.m_startingVisualShapeIndex;
@@ -9822,6 +10072,11 @@ bool PhysicsServerCommandProcessor::processCommand(const struct SharedMemoryComm
 			hasStatus = processSetAdditionalSearchPathCommand(clientCmd,serverStatusOut,bufferServerToClient, bufferSizeInBytes);
 			break;
 		}
+    case CMD_LOAD_OBJ:
+        {
+            hasStatus = processLoadOBJCommand(clientCmd,serverStatusOut,bufferServerToClient, bufferSizeInBytes);
+            break;
+        }
 	case CMD_LOAD_URDF:
 		{
 			hasStatus = processLoadURDFCommand(clientCmd,serverStatusOut,bufferServerToClient, bufferSizeInBytes);
@@ -10487,9 +10742,6 @@ void PhysicsServerCommandProcessor::resetSimulation()
 	m_data->m_userCollisionShapeHandles.exitHandles();
 	m_data->m_userCollisionShapeHandles.initHandles();
 
-	m_data->m_userDataHandles.exitHandles();
-	m_data->m_userDataHandles.initHandles();
-	m_data->m_userDataHandleLookup.clear();
 }
 
 

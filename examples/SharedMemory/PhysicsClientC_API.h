@@ -115,14 +115,14 @@ B3_SHARED_API	int	b3GetJointInfo(b3PhysicsClientHandle physClient, int bodyUniqu
 
 ///user data handling
 B3_SHARED_API b3SharedMemoryCommandHandle b3InitSyncUserDataCommand(b3PhysicsClientHandle physClient);
-B3_SHARED_API b3SharedMemoryCommandHandle b3InitAddUserDataCommand(b3PhysicsClientHandle physClient, int bodyUniqueId, int linkIndex, int visualShapeIndex, const char* key, enum UserDataValueType valueType, int valueLength, const void *valueData);
-B3_SHARED_API b3SharedMemoryCommandHandle b3InitRemoveUserDataCommand(b3PhysicsClientHandle physClient, int userDataId);
+B3_SHARED_API b3SharedMemoryCommandHandle b3InitAddUserDataCommand(b3PhysicsClientHandle physClient, int bodyUniqueId, int linkIndex, const char* key, enum UserDataValueType valueType, int valueLength, const void *valueData);
+B3_SHARED_API b3SharedMemoryCommandHandle b3InitRemoveUserDataCommand(b3PhysicsClientHandle physClient, int bodyUniqueId, int linkIndex, int userDataId);
 
-B3_SHARED_API int b3GetUserData(b3PhysicsClientHandle physClient, int userDataId, struct b3UserDataValue *valueOut);
-B3_SHARED_API int b3GetUserDataId(b3PhysicsClientHandle physClient, int bodyUniqueId, int linkIndex, int visualShapeIndex, const char *key);
+B3_SHARED_API int b3GetUserData(b3PhysicsClientHandle physClient, int bodyUniqueId, int linkIndex, int userDataId, struct b3UserDataValue *valueOut);
+B3_SHARED_API int b3GetUserDataId(b3PhysicsClientHandle physClient, int bodyUniqueId, int linkIndex, const char *key);
 B3_SHARED_API int b3GetUserDataIdFromStatus(b3SharedMemoryStatusHandle statusHandle);
-B3_SHARED_API int b3GetNumUserData(b3PhysicsClientHandle physClient, int bodyUniqueId);
-B3_SHARED_API void b3GetUserDataInfo(b3PhysicsClientHandle physClient, int bodyUniqueId, int userDataIndex, const char **keyOut, int *userDataIdOut, int *linkIndexOut, int *visualShapeIndexOut);
+B3_SHARED_API int b3GetNumUserData(b3PhysicsClientHandle physClient, int bodyUniqueId, int linkIndex);
+B3_SHARED_API void b3GetUserDataInfo(b3PhysicsClientHandle physClient, int bodyUniqueId, int linkIndex, int userDataIndex, const char **keyOut, int *userDataIdOut);
 
 B3_SHARED_API	b3SharedMemoryCommandHandle b3GetDynamicsInfoCommandInit(b3PhysicsClientHandle physClient, int bodyUniqueId, int linkIndex);
 ///given a body unique id and link index, return the dynamics information. See b3DynamicsInfo in SharedMemoryPublic.h
@@ -337,6 +337,15 @@ B3_SHARED_API	int b3PhysicsParamSetInternalSimFlags(b3SharedMemoryCommandHandle 
 B3_SHARED_API b3SharedMemoryCommandHandle	b3InitStepSimulationCommand(b3PhysicsClientHandle physClient);
 
 B3_SHARED_API b3SharedMemoryCommandHandle	b3InitResetSimulationCommand(b3PhysicsClientHandle physClient);
+
+    
+// Load a model from a OBJ file
+B3_SHARED_API b3SharedMemoryCommandHandle b3LoadObjCommandInit(b3PhysicsClientHandle physClient, const char* objFileName);
+B3_SHARED_API int b3LoadObjCommandSetFlags(b3SharedMemoryCommandHandle commandHandle, int flags);
+B3_SHARED_API int b3LoadObjCommandSetStartPosition(b3SharedMemoryCommandHandle commandHandle, double startPosX,double startPosY,double startPosZ);
+B3_SHARED_API int b3LoadObjCommandSetStartOrientation(b3SharedMemoryCommandHandle commandHandle, double startOrnX,double startOrnY,double startOrnZ, double startOrnW);
+B3_SHARED_API int b3LoadObjCommandSetStartScale(b3SharedMemoryCommandHandle commandHandle, double startSclX,double startSclY,double startSclZ);
+    
 
 ///Load a robot from a URDF file. Status type will CMD_URDF_LOADING_COMPLETED.
 ///Access the robot from the unique body index, through b3GetStatusBodyIndex(statusHandle);

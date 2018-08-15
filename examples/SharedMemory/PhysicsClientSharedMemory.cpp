@@ -15,12 +15,26 @@
 #include "LinearMath/btQuickprof.h"
 
 
+struct UserDataCache 
+{
+	btHashMap<btHashInt, SharedMemoryUserData> m_userDataMap;
+	btHashMap<btHashString, int> m_keyToUserDataIdMap;
+
+	UserDataCache()
+	{
+	}
+	~UserDataCache() 
+	{
+	}
+};
+
 struct BodyJointInfoCache
 {
 	std::string m_baseName;
 	b3AlignedObjectArray<b3JointInfo> m_jointInfo;
 	std::string m_bodyName;
-	btAlignedObjectArray<int> m_userDataIds;
+	// Joint index -> user data.
+	btHashMap<btHashInt, UserDataCache> m_jointToUserDataMap;
 
 	~BodyJointInfoCache() 
 	{
@@ -64,10 +78,7 @@ struct PhysicsClientSharedMemoryInternalData {
     btAlignedObjectArray<int> m_bodyIdsRequestInfo;
 	btAlignedObjectArray<int> m_constraintIdsRequestInfo;
 
-	btAlignedObjectArray<int> m_userDataIdsRequestInfo;
-	btHashMap<btHashInt, SharedMemoryUserData> m_userDataMap;
-	btHashMap<SharedMemoryUserDataHashKey, int> m_userDataHandleLookup;
-
+	btAlignedObjectArray<b3UserDataGlobalIdentifier> m_userDataIdsRequestInfo;
 
     SharedMemoryStatus m_tempBackupServerStatus;
     
@@ -232,12 +243,6 @@ void PhysicsClientSharedMemory::removeCachedBody(int bodyUniqueId)
 	BodyJointInfoCache** bodyJointsPtr = m_data->m_bodyJointMap[bodyUniqueId];
 	if (bodyJointsPtr && *bodyJointsPtr)
 	{
-		for(int i=0; i<(*bodyJointsPtr)->m_userDataIds.size(); i++) {
-			const int userDataId = (*bodyJointsPtr)->m_userDataIds[i];
-			SharedMemoryUserData *userData = m_data->m_userDataMap[userDataId];
-			m_data->m_userDataHandleLookup.remove(SharedMemoryUserDataHashKey(userData));
-			m_data->m_userDataMap.remove(userDataId);
-		}
 		delete (*bodyJointsPtr);
 		m_data->m_bodyJointMap.remove(bodyUniqueId);
 	}
@@ -259,8 +264,6 @@ void PhysicsClientSharedMemory::resetData()
 	}
 	m_data->m_bodyJointMap.clear();
 	m_data->m_userConstraintInfoMap.clear();
-	m_data->m_userDataHandleLookup.clear();
-	m_data->m_userDataMap.clear();
                 
 }
 void PhysicsClientSharedMemory::setSharedMemoryKey(int key) 
@@ -534,6 +537,26 @@ const SharedMemoryStatus* PhysicsClientSharedMemory::processServerStatus() {
 
 
 			case CMD_CREATE_MULTI_BODY_COMPLETED:
+            case CMD_OBJ_LOADING_COMPLETED:
+            {
+                B3_PROFILE("CMD_OBJ_LOADING_COMPLETED");
+                
+                if (m_data->m_verboseOutput) {
+                    b3Printf("Server loading the OBJ OK\n");
+                }
+                
+                if(serverCmd.m_numDataStreamBytes > 0)
+                {
+//                    bParse::btBulletFile bf(
+//                                            this->m_data->m_testBlock1->m_bulletStreamDataServerToClientRefactor,
+//                                            serverCmd.m_numDataStreamBytes);
+//                    bf.setFileDNAisMemoryDNA();
+//                    bf.parse(false);
+//                    int bodyUniqueId = serverCmd.m_dataStreamArguments.m_bodyUniqueId;
+                }
+                break;
+            }
+                
             case CMD_URDF_LOADING_COMPLETED: 
 			{
 				B3_PROFILE("CMD_URDF_LOADING_COMPLETED");
@@ -1406,26 +1429,25 @@ const SharedMemoryStatus* PhysicsClientSharedMemory::processServerStatus() {
 				BodyJointInfoCache** bodyJointsPtr = m_data->m_bodyJointMap.getAtIndex(i);
 				if (bodyJointsPtr && *bodyJointsPtr)
 				{
-					(*bodyJointsPtr)->m_userDataIds.clear();
+					(*bodyJointsPtr)->m_jointToUserDataMap.clear();
 				}
-				m_data->m_userDataMap.clear();
-				m_data->m_userDataHandleLookup.clear();
 			}
 			const int numIdentifiers = serverCmd.m_syncUserDataArgs.m_numUserDataIdentifiers;
 			if (numIdentifiers > 0) {
 				m_data->m_tempBackupServerStatus = m_data->m_lastServerStatus;
 
-				const int *identifiers = (int *)m_data->m_testBlock1->m_bulletStreamDataServerToClientRefactor;
-				m_data->m_userDataIdsRequestInfo.reserve(numIdentifiers - 1);
-				// Store the identifiers that still need to be requested.
-				for (int i=0; i<numIdentifiers - 1; i++) {
+				const b3UserDataGlobalIdentifier *identifiers = (b3UserDataGlobalIdentifier *)m_data->m_testBlock1->m_bulletStreamDataServerToClientRefactor;
+				for (int i=0; i<numIdentifiers; i++) {
 					m_data->m_userDataIdsRequestInfo.push_back(identifiers[i]);
 				}
 
-				// Request individual user data entries, start with last identifier.
+				// Request individual user data entries.
+				const b3UserDataGlobalIdentifier userDataGlobalId = m_data->m_userDataIdsRequestInfo[m_data->m_userDataIdsRequestInfo.size()-1];
+				m_data->m_userDataIdsRequestInfo.pop_back();
+
 				SharedMemoryCommand& command = m_data->m_testBlock1->m_clientCommands[0];
 				command.m_type = CMD_REQUEST_USER_DATA;
-				command.m_userDataRequestArgs.m_userDataId = identifiers[numIdentifiers - 1];
+				command.m_userDataRequestArgs = userDataGlobalId;
 				submitClientCommand(command);
 				return 0;
 			}
@@ -1433,23 +1455,31 @@ const SharedMemoryStatus* PhysicsClientSharedMemory::processServerStatus() {
 
 		if (serverCmd.m_type == CMD_ADD_USER_DATA_COMPLETED || serverCmd.m_type == CMD_REQUEST_USER_DATA_COMPLETED) {
 			B3_PROFILE("CMD_ADD_USER_DATA_COMPLETED");
-			const UserDataResponseArgs response = serverCmd.m_userDataResponseArgs;
-			BodyJointInfoCache** bodyJointsPtr = m_data->m_bodyJointMap[response.m_bodyUniqueId];
+			const b3UserDataGlobalIdentifier userDataGlobalId = serverCmd.m_userDataResponseArgs.m_userDataGlobalId;
+			BodyJointInfoCache** bodyJointsPtr = m_data->m_bodyJointMap[userDataGlobalId.m_bodyUniqueId];
 			if (bodyJointsPtr && *bodyJointsPtr) {
+				UserDataCache* userDataCachePtr = (*bodyJointsPtr)->m_jointToUserDataMap[userDataGlobalId.m_linkIndex];
+				if (!userDataCachePtr) 
+				{
+					UserDataCache cache;
+					(*bodyJointsPtr)->m_jointToUserDataMap.insert(userDataGlobalId.m_linkIndex, cache);
+				}
+				userDataCachePtr = (*bodyJointsPtr)->m_jointToUserDataMap[userDataGlobalId.m_linkIndex];
+
 				const char *dataStream = m_data->m_testBlock1->m_bulletStreamDataServerToClientRefactor;
-				SharedMemoryUserData* userData = m_data->m_userDataMap[response.m_userDataId];
-				if (userData) {
+				
+				SharedMemoryUserData* userDataPtr = (userDataCachePtr)->m_userDataMap[userDataGlobalId.m_userDataId];
+				if (userDataPtr) {
 					// Only replace the value.
-					userData->replaceValue(dataStream, response.m_valueLength, response.m_valueType);
+					userDataPtr->replaceValue(dataStream, serverCmd.m_userDataResponseArgs.m_valueLength, serverCmd.m_userDataResponseArgs.m_valueType);
 				}
 				else {
 					// Add a new user data entry.
-					const char *key = response.m_key;
-					m_data->m_userDataMap.insert(response.m_userDataId, SharedMemoryUserData(key, response.m_bodyUniqueId, response.m_linkIndex, response.m_visualShapeIndex));
-					userData = m_data->m_userDataMap[response.m_userDataId];
-					userData->replaceValue(dataStream, response.m_valueLength, response.m_valueType);
-					m_data->m_userDataHandleLookup.insert(SharedMemoryUserDataHashKey(userData), response.m_userDataId);
-					(*bodyJointsPtr)->m_userDataIds.push_back(response.m_userDataId);
+					const char *key = serverCmd.m_userDataResponseArgs.m_key;
+					(userDataCachePtr)->m_userDataMap.insert(userDataGlobalId.m_userDataId, SharedMemoryUserData(key));
+					(userDataCachePtr)->m_keyToUserDataIdMap.insert(key, userDataGlobalId.m_userDataId);
+					userDataPtr = (userDataCachePtr)->m_userDataMap[userDataGlobalId.m_userDataId];
+					userDataPtr->replaceValue(dataStream, serverCmd.m_userDataResponseArgs.m_valueLength, serverCmd.m_userDataResponseArgs.m_valueType);
 				}
 			}
 		}
@@ -1458,12 +1488,12 @@ const SharedMemoryStatus* PhysicsClientSharedMemory::processServerStatus() {
 
 			if (m_data->m_userDataIdsRequestInfo.size() > 0) {
 				// Request individual user data entries.
-				const int userDataId = m_data->m_userDataIdsRequestInfo[m_data->m_userDataIdsRequestInfo.size()-1];
+				const b3UserDataGlobalIdentifier userDataGlobalId = m_data->m_userDataIdsRequestInfo[m_data->m_userDataIdsRequestInfo.size()-1];
 				m_data->m_userDataIdsRequestInfo.pop_back();
 
 				SharedMemoryCommand& command = m_data->m_testBlock1->m_clientCommands[0];
 				command.m_type = CMD_REQUEST_USER_DATA;
-				command.m_userDataRequestArgs.m_userDataId = userDataId;
+				command.m_userDataRequestArgs = userDataGlobalId;
 				submitClientCommand(command);
 				return 0;
 			}
@@ -1472,15 +1502,19 @@ const SharedMemoryStatus* PhysicsClientSharedMemory::processServerStatus() {
 
 		if (serverCmd.m_type == CMD_REMOVE_USER_DATA_COMPLETED) {
 			B3_PROFILE("CMD_REMOVE_USER_DATA_COMPLETED");
-			const int userDataId = serverCmd.m_removeUserDataResponseArgs.m_userDataId;
-			SharedMemoryUserData *userData = m_data->m_userDataMap[userDataId];
-			if (userData) {
-				BodyJointInfoCache** bodyJointsPtr = m_data->m_bodyJointMap[userData->m_bodyUniqueId];
-				if (bodyJointsPtr && *bodyJointsPtr) {
-					(*bodyJointsPtr)->m_userDataIds.remove(userDataId);
+			const b3UserDataGlobalIdentifier userDataGlobalId = serverCmd.m_removeUserDataResponseArgs;
+			BodyJointInfoCache** bodyJointsPtr = m_data->m_bodyJointMap[userDataGlobalId.m_bodyUniqueId];
+			if (bodyJointsPtr && *bodyJointsPtr) {
+				UserDataCache* userDataCachePtr = (*bodyJointsPtr)->m_jointToUserDataMap[userDataGlobalId.m_linkIndex];
+				if (userDataCachePtr) 
+				{
+					SharedMemoryUserData *userDataPtr = (userDataCachePtr)->m_userDataMap[userDataGlobalId.m_userDataId];
+					if (userDataPtr) 
+					{
+						(userDataCachePtr)->m_keyToUserDataIdMap.remove((userDataPtr)->m_key.c_str());
+						(userDataCachePtr)->m_userDataMap.remove(userDataGlobalId.m_userDataId);
+					}
 				}
-				m_data->m_userDataHandleLookup.remove(SharedMemoryUserDataHashKey(userData));
-				m_data->m_userDataMap.remove(userDataId);
 			}
 		}
 
@@ -1838,8 +1872,16 @@ double PhysicsClientSharedMemory::getTimeOut() const
 	return m_data->m_timeOutInSeconds;
 }
 
-bool PhysicsClientSharedMemory::getCachedUserData(int userDataId, struct b3UserDataValue &valueOut) const {
-	SharedMemoryUserData *userDataPtr = m_data->m_userDataMap[userDataId];
+bool PhysicsClientSharedMemory::getCachedUserData(int bodyUniqueId, int linkIndex, int userDataId, struct b3UserDataValue &valueOut) const {
+	BodyJointInfoCache** bodyJointsPtr = m_data->m_bodyJointMap[bodyUniqueId];
+	if (!bodyJointsPtr || !(*bodyJointsPtr)) {
+		return false;
+	}
+	UserDataCache* userDataCachePtr = (*bodyJointsPtr)->m_jointToUserDataMap[linkIndex];
+	if (!userDataCachePtr) {
+		return false;
+	}
+	SharedMemoryUserData *userDataPtr = (userDataCachePtr)->m_userDataMap[userDataId];
 	if (!userDataPtr) 
 	{
 		return false;
@@ -1850,37 +1892,54 @@ bool PhysicsClientSharedMemory::getCachedUserData(int userDataId, struct b3UserD
 	return true;
 }
 
-int PhysicsClientSharedMemory::getCachedUserDataId(int bodyUniqueId, int linkIndex, int visualShapeIndex, const char *key) const {
-	int* userDataId = m_data->m_userDataHandleLookup.find(SharedMemoryUserDataHashKey(key, bodyUniqueId, linkIndex, visualShapeIndex));
+int PhysicsClientSharedMemory::getCachedUserDataId(int bodyUniqueId, int linkIndex, const char *key) const {
+	BodyJointInfoCache** bodyJointsPtr = m_data->m_bodyJointMap[bodyUniqueId];
+	if (!bodyJointsPtr || !(*bodyJointsPtr)) {
+		return -1;
+	}
+	UserDataCache* userDataCachePtr = (*bodyJointsPtr)->m_jointToUserDataMap[linkIndex];
+	if (!userDataCachePtr) 
+	{
+		return -1;
+	}
+	int *userDataId = (userDataCachePtr)->m_keyToUserDataIdMap[key];
 	if (!userDataId) {
 		return -1;
 	}
 	return *userDataId;
 }
 
-int PhysicsClientSharedMemory::getNumUserData(int bodyUniqueId) const {
+int PhysicsClientSharedMemory::getNumUserData(int bodyUniqueId, int linkIndex) const {
 	BodyJointInfoCache** bodyJointsPtr = m_data->m_bodyJointMap[bodyUniqueId];
 	if (!bodyJointsPtr || !(*bodyJointsPtr)) {
 		return 0;
 	}
-	return (*bodyJointsPtr)->m_userDataIds.size();
+	UserDataCache* userDataCachePtr = (*bodyJointsPtr)->m_jointToUserDataMap[linkIndex];
+	if (!userDataCachePtr) 
+	{
+		return 0;
+	}
+	return (userDataCachePtr)->m_userDataMap.size();
 }
 
-void PhysicsClientSharedMemory::getUserDataInfo(int bodyUniqueId, int userDataIndex, const char **keyOut, int *userDataIdOut, int *linkIndexOut, int *visualShapeIndexOut) const {
+void PhysicsClientSharedMemory::getUserDataInfo(int bodyUniqueId, int linkIndex, int userDataIndex, const char **keyOut, int *userDataIdOut) const {
 	BodyJointInfoCache** bodyJointsPtr = m_data->m_bodyJointMap[bodyUniqueId];
-	if (!bodyJointsPtr || !(*bodyJointsPtr) || userDataIndex < 0 || userDataIndex > (*bodyJointsPtr)->m_userDataIds.size()) 
+	if (!bodyJointsPtr || !(*bodyJointsPtr)) 
 	{
 		*keyOut = 0;
 		*userDataIdOut = -1;
 		return;
 	}
-	int userDataId = (*bodyJointsPtr)->m_userDataIds[userDataIndex];
-	SharedMemoryUserData *userData = m_data->m_userDataMap[userDataId];
-
-	*userDataIdOut = userDataId;
-	*keyOut = userData->m_key.c_str();
-	*linkIndexOut = userData->m_linkIndex;
-	*visualShapeIndexOut = userData->m_visualShapeIndex;
+	UserDataCache* userDataCachePtr = (*bodyJointsPtr)->m_jointToUserDataMap[linkIndex];
+	if (!userDataCachePtr || userDataIndex >= (userDataCachePtr)->m_userDataMap.size()) 
+	{
+		*keyOut = 0;
+		*userDataIdOut = -1;
+		return;
+	}
+	*userDataIdOut = (userDataCachePtr)->m_userDataMap.getKeyAtIndex(userDataIndex).getUid1();
+	SharedMemoryUserData *userDataPtr = (userDataCachePtr)->m_userDataMap.getAtIndex(userDataIndex);
+	*keyOut = (userDataPtr)->m_key.c_str();
 }
 
 

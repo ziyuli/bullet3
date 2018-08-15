@@ -7,8 +7,7 @@
 //Please don't replace an existing magic number:
 //instead, only ADD a new one at the top, comment-out previous one
 
-#define SHARED_MEMORY_MAGIC_NUMBER 201807040
-//#define SHARED_MEMORY_MAGIC_NUMBER 201806150
+#define SHARED_MEMORY_MAGIC_NUMBER 201806150
 //#define SHARED_MEMORY_MAGIC_NUMBER 201806020
 //#define SHARED_MEMORY_MAGIC_NUMBER 201801170
 //#define SHARED_MEMORY_MAGIC_NUMBER 201801080
@@ -25,6 +24,7 @@
 
 enum EnumSharedMemoryClientCommand
 {
+    CMD_LOAD_OBJ,
     CMD_LOAD_SDF,
 	CMD_LOAD_URDF,
 	CMD_LOAD_BULLET,
@@ -111,6 +111,8 @@ enum EnumSharedMemoryServerStatus
         CMD_SDF_LOADING_FAILED,
         CMD_URDF_LOADING_COMPLETED,
         CMD_URDF_LOADING_FAILED,
+        CMD_OBJ_LOADING_COMPLETED,
+        CMD_OBJ_LOADING_FAILED,
 		CMD_BULLET_LOADING_COMPLETED,
 		CMD_BULLET_LOADING_FAILED,
 		CMD_BULLET_SAVING_COMPLETED,
@@ -216,6 +218,11 @@ enum EnumSharedMemoryServerStatus
         CMD_MAX_SERVER_COMMANDS
 };
 
+enum eObjCollisionFlags
+{
+	FORCE_CONCAVE=1,
+};
+
 enum JointInfoFlags
 {
     JOINT_HAS_MOTORIZED_POWER=1,
@@ -286,6 +293,13 @@ struct b3UserDataValue
 	int m_type;
 	int m_length;
 	char* m_data1;
+};
+
+struct b3UserDataGlobalIdentifier 
+{
+	int m_bodyUniqueId;
+	int m_linkIndex;
+	int m_userDataId;
 };
 
 struct b3UserConstraint
@@ -579,20 +593,9 @@ typedef union {
 
 
 #define MAX_RAY_INTERSECTION_BATCH_SIZE 256
-
-#ifdef __APPLE__
-#define MAX_RAY_INTERSECTION_BATCH_SIZE_STREAMING (4*1024)
-#else
-#define MAX_RAY_INTERSECTION_BATCH_SIZE_STREAMING (16*1024)
-#endif
-
+#define MAX_RAY_INTERSECTION_BATCH_SIZE_STREAMING 16*1024
 #define MAX_RAY_HITS MAX_RAY_INTERSECTION_BATCH_SIZE
 #define VISUAL_SHAPE_MAX_PATH_LEN 1024
-
-enum b3VisualShapeDataFlags
-{
-	eVISUAL_SHAPE_DATA_TEXTURE_UNIQUE_IDS = 1,
-};
 
 struct b3VisualShapeData
 {
@@ -604,10 +607,6 @@ struct b3VisualShapeData
     double m_localVisualFrame[7];//pos[3], orn[4]
 	//todo: add more data if necessary (material color etc, although material can be in asset file .obj file)
     double m_rgbaColor[4];
-    int m_tinyRendererTextureId;
-    int m_textureUniqueId;
-    int m_openglTextureId;
-    
 };
 
 struct b3VisualShapeInformation
@@ -746,8 +745,6 @@ enum eCONNECT_METHOD {
   eCONNECT_GUI_SERVER=7,
   eCONNECT_GUI_MAIN_THREAD=8,
   eCONNECT_SHARED_MEMORY_SERVER=9,
-  eCONNECT_DART=10,
-  eCONNECT_MUJOCO=11,
 };
 
 enum eURDF_Flags

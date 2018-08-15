@@ -177,30 +177,17 @@ int main(int argc, char *argv[])
 							SharedMemoryCommand cmd;
                         
 							SharedMemoryCommand* cmdPtr = 0;
-
-							int type = *(int*)&bytesReceived[0];
-
+                        
 							//performance test
 							if (numBytesRec == sizeof(int))
 							{
 								cmdPtr = &cmd;
 								cmd.m_type = *(int*)&bytesReceived[0];
 							}
-							else
+                        
+							if (numBytesRec == sizeof(SharedMemoryCommand))
 							{
-
-								if (numBytesRec == sizeof(SharedMemoryCommand))
-								{
-									cmdPtr = (SharedMemoryCommand*)&bytesReceived[0];
-								}
-								else
-								{
-									if (numBytesRec==36)
-									{
-										cmdPtr = &cmd;
-										memcpy(&cmd, &bytesReceived[0], numBytesRec);
-									}
-								}
+								cmdPtr = (SharedMemoryCommand*)&bytesReceived[0];
 							}
 							if (cmdPtr)
 							{
@@ -220,7 +207,7 @@ int main(int argc, char *argv[])
 								}
 								if (gVerboseNetworkMessagesServer)
 								{
-									//printf("buffer.size = %d\n", buffer.size());
+									printf("buffer.size = %d\n", buffer.size());
 									printf("serverStatus.m_numDataStreamBytes = %d\n", serverStatus.m_numDataStreamBytes);
 								}
 								if (hasStatus)
@@ -247,49 +234,25 @@ int main(int argc, char *argv[])
 									}
 									else
 									{
-										if (cmdPtr->m_type == CMD_REQUEST_VR_EVENTS_DATA)
+										//create packetData with [int packetSizeInBytes, status, streamBytes)
+										packetData.resize(4 + sizeof(SharedMemoryStatus) + serverStatus.m_numDataStreamBytes);
+										int sz = packetData.size();
+										int curPos = 0;
+                                    
+										MySerializeInt(sz, &packetData[curPos]);
+										curPos += 4;
+										for (int i = 0; i < sizeof(SharedMemoryStatus); i++)
 										{
-											int headerSize = 16+5 * sizeof(int) + sizeof(smUint64_t) + sizeof(char*) + sizeof(b3VRControllerEvent)*serverStatus.m_sendVREvents.m_numVRControllerEvents;
-											packetData.resize(4 + headerSize);
-											int sz = packetData.size();
-											int curPos = 0;
-											MySerializeInt(sz, &packetData[curPos]);
-											curPos += 4;
-											for (int i = 0; i < headerSize; i++)
-											{
-												packetData[i + curPos] = statBytes[i];
-											}
-											curPos += headerSize;
-											pClient->Send(&packetData[0], packetData.size());
+											packetData[i + curPos] = statBytes[i];
 										}
-										else
+										curPos += sizeof(SharedMemoryStatus);
+                                    
+										for (int i = 0; i < serverStatus.m_numDataStreamBytes; i++)
 										{
-											//create packetData with [int packetSizeInBytes, status, streamBytes)
-											packetData.resize(4 + sizeof(SharedMemoryStatus) + serverStatus.m_numDataStreamBytes);
-											int sz = packetData.size();
-											int curPos = 0;
-
-											if (gVerboseNetworkMessagesServer)
-											{
-												//printf("buffer.size = %d\n", buffer.size());
-												printf("serverStatus packed size = %d\n", sz);
-											}
-
-											MySerializeInt(sz, &packetData[curPos]);
-											curPos += 4;
-											for (int i = 0; i < sizeof(SharedMemoryStatus); i++)
-											{
-												packetData[i + curPos] = statBytes[i];
-											}
-											curPos += sizeof(SharedMemoryStatus);
-
-											for (int i = 0; i < serverStatus.m_numDataStreamBytes; i++)
-											{
-												packetData[i + curPos] = buffer[i];
-											}
-
-											pClient->Send(&packetData[0], packetData.size());
+											packetData[i + curPos] = buffer[i];
 										}
+                                    
+										pClient->Send( &packetData[0], packetData.size() );
 									}
 								}
 

@@ -22,7 +22,7 @@ struct TinyRendererVisualShapeConverter : public UrdfRenderingInterface
 
 	virtual void changeShapeTexture(int objectUniqueId, int linkIndex, int shapeIndex, int textureUniqueId);
 
-	virtual void removeVisualShape(int shapeUid);
+	virtual void removeVisualShape(int shapeUid, int bodyUid);
 
 	virtual void setUpAxis(int axis);
 	

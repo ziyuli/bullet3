@@ -84,6 +84,15 @@ enum EnumLoadStateArgsUpdateFlags
 	CMD_LOAD_STATE_HAS_FILENAME=2,
 };
 
+enum EnumObjArgsUpdateFlags
+{
+    OBJ_ARGS_FILE_NAME=1,
+    OBJ_ARGS_INITIAL_POSITION=2,
+    OBJ_ARGS_INITIAL_ORIENTATION=4,
+    OBJ_ARGS_INITIAL_SCALE=8,
+    OBJ_ARGS_HAS_CUSTOM_OBJ_FLAGS = 16,
+};
+
 enum EnumUrdfArgsUpdateFlags
 {
 	URDF_ARGS_FILE_NAME=1,
@@ -95,6 +104,14 @@ enum EnumUrdfArgsUpdateFlags
 	URDF_ARGS_USE_GLOBAL_SCALING =64,
 };
 
+struct ObjArgs
+{
+    char m_objFileName[MAX_URDF_FILENAME_LENGTH];
+    double m_initialPosition[3];
+    double m_initialOrientation[4];
+    double m_initialScale[3];
+    int m_objFlags;
+};
 
 struct UrdfArgs
 {
@@ -993,20 +1010,13 @@ struct b3StateSerializationArguments
 struct SyncUserDataArgs
 {
 	// User data identifiers stored in m_bulletStreamDataServerToClientRefactor
-	// as as array of integers.
+	// as as array of b3UserDataGlobalIdentifier objects
 	int m_numUserDataIdentifiers;
-};
-
-struct UserDataRequestArgs {
-  int m_userDataId;
 };
 
 struct UserDataResponseArgs
 {
-	int m_userDataId;
-	int m_bodyUniqueId;
-	int m_linkIndex;
-	int m_visualShapeIndex;
+	b3UserDataGlobalIdentifier m_userDataGlobalId;
 	int m_valueType;
 	int m_valueLength;
 	char m_key[MAX_USER_DATA_KEY_LENGTH];
@@ -1017,7 +1027,6 @@ struct AddUserDataRequestArgs
 {
 	int m_bodyUniqueId;
 	int m_linkIndex;
-	int m_visualShapeIndex;
 	int m_valueType;
 	int m_valueLength;
 	char m_key[MAX_USER_DATA_KEY_LENGTH];
@@ -1037,6 +1046,7 @@ struct SharedMemoryCommand
 
     union
     {
+        struct ObjArgs m_objArguments;
         struct UrdfArgs m_urdfArguments;
 		struct SdfArgs m_sdfArguments;
 		struct MjcfArgs	m_mjcfArguments;
@@ -1081,9 +1091,9 @@ struct SharedMemoryCommand
 		struct b3CustomCommand m_customCommandArgs;
 		struct b3StateSerializationArguments m_loadStateArguments;
 		struct RequestCollisionShapeDataArgs m_requestCollisionShapeDataArguments;		
-		struct UserDataRequestArgs m_userDataRequestArgs;
+		struct b3UserDataGlobalIdentifier m_userDataRequestArgs;
 		struct AddUserDataRequestArgs m_addUserDataRequestArgs;
-		struct UserDataRequestArgs m_removeUserDataRequestArgs;
+		struct b3UserDataGlobalIdentifier m_removeUserDataRequestArgs;
     };
 };
 
@@ -1158,7 +1168,7 @@ struct SharedMemoryStatus
 		struct SendCollisionShapeDataArgs m_sendCollisionShapeArgs;
 		struct SyncUserDataArgs m_syncUserDataArgs;
 		struct UserDataResponseArgs m_userDataResponseArgs;
-		struct UserDataRequestArgs m_removeUserDataResponseArgs;
+		struct b3UserDataGlobalIdentifier m_removeUserDataResponseArgs;
 	};
 };
 

@@ -82,7 +82,6 @@ int main(int argc, char* argv[])
 	
 	
 	example->initPhysics();
-
 	
 	while (example->isConnected() && !(example->wantsTermination() || interrupted))
 	{

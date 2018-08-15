@@ -671,15 +671,13 @@ void TinyRendererVisualShapeConverter::convertVisualShapes(
 			visualShape.m_rgbaColor[1] = rgbaColor[1];
 			visualShape.m_rgbaColor[2] = rgbaColor[2];
 			visualShape.m_rgbaColor[3] = rgbaColor[3];
-            visualShape.m_openglTextureId = -1;
-            visualShape.m_tinyRendererTextureId = -1;
-            visualShape.m_textureUniqueId = -1;
             
 			{
 				B3_PROFILE("convertURDFToVisualShape");
 				convertURDFToVisualShape(vis, pathPrefix, localInertiaFrame.inverse()*childTrans, vertices, indices, textures, visualShape);
 			}
-			
+			m_data->m_visualShapes.push_back(visualShape);
+
             if (vertices.size() && indices.size())
             {
                 TinyRenderObjectData* tinyObj = new TinyRenderObjectData(m_data->m_rgbColorBuffer,m_data->m_depthBuffer, &m_data->m_shadowBuffer, &m_data->m_segmentationMaskBuffer, bodyUniqueId, linkIndex);
@@ -703,18 +701,18 @@ void TinyRendererVisualShapeConverter::convertVisualShapes(
 				}
                 visuals->m_renderObjects.push_back(tinyObj);
             }
-            
-            btAssert(textures.size()<=1);
 			for (int i=0;i<textures.size();i++)
 			{
-                visualShape.m_tinyRendererTextureId = m_data->m_textures.size();
-                m_data->m_textures.push_back(textures[i]);                
+				if (!textures[i].m_isCached)
+				{
+					free(textures[i].textureData1);
+				}
 			}
-            m_data->m_visualShapes.push_back(visualShape);
-
 		}
 	}
 }
+
+bool compFunc (b3VisualShapeData a, b3VisualShapeData b) { return (a.m_objectUniqueId < b.m_objectUniqueId); }
 
 int TinyRendererVisualShapeConverter::getNumVisualShapes(int bodyUniqueId)
 {
@@ -745,6 +743,13 @@ int TinyRendererVisualShapeConverter::getNumVisualShapes(int bodyUniqueId)
 			}
 		}
 	}
+
+	// for (int i = 0; i < m_data->m_visualShapes.size(); i++)
+	// {
+	// 	printf("# %d  uid: %d\n", i, m_data->m_visualShapes[i].m_objectUniqueId);
+	// }
+
+
 	return count;
 }
 
@@ -1135,7 +1140,7 @@ void TinyRendererVisualShapeConverter::copyCameraImageData(unsigned char* pixels
     }    
 }
 
-void TinyRendererVisualShapeConverter::removeVisualShape(int collisionObjectUniqueId)
+void TinyRendererVisualShapeConverter::removeVisualShape(int collisionObjectUniqueId,int bodyUid)
 {
 	TinyRendererObjectArray** ptrptr = m_data->m_swRenderInstances[collisionObjectUniqueId];
 	if (ptrptr && *ptrptr)
@@ -1151,6 +1156,28 @@ void TinyRendererVisualShapeConverter::removeVisualShape(int collisionObjectUniq
 		delete ptr;
 		m_data->m_swRenderInstances.remove(collisionObjectUniqueId);
 	}
+
+	// Fix Visual Shape Disorder...
+	int i = 0;
+	while(i < m_data->m_visualShapes.size())
+	{
+		if(m_data->m_visualShapes[i].m_objectUniqueId == bodyUid)
+		{
+			m_data->m_visualShapes.removeAtIndex(i);
+		}
+		else i++;
+	}
+	m_data->m_visualShapes.quickSort(compFunc);
+
+	// Release Memory...
+
+	// for (int i=0;i<m_data->m_textures.size();i++)
+	// {
+	// 	free(m_data->m_textures[i].textureData1);
+	// }
+
+	// m_data->m_textures.clear();
+
 }
 
 
@@ -1203,13 +1230,13 @@ void TinyRendererVisualShapeConverter::changeShapeTexture(int objectUniqueId, in
 				for (int v = 0; v < visualArray->m_renderObjects.size(); v++)
 				{
 					TinyRenderObjectData* renderObj = visualArray->m_renderObjects[v];
-                    
 					if ((shapeIndex < 0) || (shapeIndex == v))
 					{
 						renderObj->m_model->setDiffuseTextureFromData(m_data->m_textures[textureUniqueId].textureData1, m_data->m_textures[textureUniqueId].m_width, m_data->m_textures[textureUniqueId].m_height);
 					}
 				}
 			}
+
 		}
 	}
 }
