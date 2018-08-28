@@ -2972,7 +2972,7 @@ bool PhysicsServerCommandProcessor::loadSdf(const char* fileName, char* bufferSe
 }
 
 
-bool PhysicsServerCommandProcessor::loadObj(const char* fileName, const btVector3& pos, const btQuaternion& orn, const btVector3& scl, int* bodyUniqueIdPtr, char* bufferServerToClient, int bufferSizeInBytes, int flags)
+bool PhysicsServerCommandProcessor::loadObj(const char* fileName, const btVector3& pos, const btQuaternion& orn, const btVector3& scl, const double mas, int* bodyUniqueIdPtr, char* bufferServerToClient, int bufferSizeInBytes, int flags)
 {
     *bodyUniqueIdPtr = -1;
     
@@ -3060,7 +3060,7 @@ bool PhysicsServerCommandProcessor::loadObj(const char* fileName, const btVector
 	        InternalBodyHandle * bodyHandle = m_data->m_bodyHandles.getHandle(bodyUniqueId);
 	        sd.m_bodyUniqueIds.push_back(bodyUniqueId);
 
-	        btScalar mass = 0;
+	        btScalar mass = mas;
 	        btVector3 localInertiaDiagonal(0,0,0);
 
 	        btRigidBody::btRigidBodyConstructionInfo rbci(mass, 0, compound, localInertiaDiagonal);
@@ -3111,7 +3111,7 @@ bool PhysicsServerCommandProcessor::loadObj(const char* fileName, const btVector
 	            bodyHandle->m_bodyName = o2b.getBodyName();
 	        }
 	        
-	        btScalar mass = 0;
+	        btScalar mass = mas;
 	        btVector3 localInertiaDiagonal(0,0,0);
 
 	        o2b.getMassAndInertia2(-1, mass,localInertiaDiagonal,bodyHandle->m_rootLocalInertialFrame,0);
@@ -6535,6 +6535,8 @@ bool PhysicsServerCommandProcessor::processLoadOBJCommand(const struct SharedMem
     btVector3 initialPos(0,0,0);
     btQuaternion initialOrn(0,0,0,1);
     btVector3 initialScl(1,1,1);
+    double initialMass = 0;
+
     if (clientCmd.m_updateFlags & OBJ_ARGS_INITIAL_POSITION)
     {
         initialPos[0] = objArgs.m_initialPosition[0];
@@ -6560,11 +6562,15 @@ bool PhysicsServerCommandProcessor::processLoadOBJCommand(const struct SharedMem
         initialScl[2] = objArgs.m_initialScale[2];
     }
 
+    if (clientCmd.m_updateFlags & OBJ_ARGS_INITIAL_MASS) {
+        initialMass = objArgs.m_initialMass;
+    }
+
     //printf("objFlags: %d\n", objFlags);
     
     int bodyUniqueId;
     bool completedOk = loadObj(objArgs.m_objFileName,
-                               initialPos,initialOrn,initialScl,
+                               initialPos,initialOrn,initialScl, initialMass,
                                &bodyUniqueId, bufferServerToClient, bufferSizeInBytes, objFlags);
     
     if (completedOk && bodyUniqueId>=0)

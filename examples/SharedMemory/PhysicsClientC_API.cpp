@@ -94,6 +94,24 @@ B3_SHARED_API b3SharedMemoryCommandHandle b3LoadObjCommandInit(b3PhysicsClientHa
 }
 
 
+B3_SHARED_API int b3LoadObjCommandSetMass(b3SharedMemoryCommandHandle commandHandle, double mass)
+{
+	struct SharedMemoryCommand* command = (struct SharedMemoryCommand*) commandHandle;
+    b3Assert(command);
+    if (command)
+    {
+    	b3Assert(command->m_type == CMD_LOAD_OBJ);
+    	if (command->m_type == CMD_LOAD_OBJ)
+        {
+            command->m_objArguments.m_initialMass = mass;
+            command->m_updateFlags |= OBJ_ARGS_INITIAL_MASS;
+        }
+        return 0;
+    }
+    return -1;
+}
+
+
 B3_SHARED_API int b3LoadObjCommandSetStartPosition(b3SharedMemoryCommandHandle commandHandle, double startPosX,double startPosY,double startPosZ)
 {
     struct SharedMemoryCommand* command = (struct SharedMemoryCommand*) commandHandle;

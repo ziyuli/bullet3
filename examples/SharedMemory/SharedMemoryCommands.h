@@ -91,6 +91,7 @@ enum EnumObjArgsUpdateFlags
     OBJ_ARGS_INITIAL_ORIENTATION=4,
     OBJ_ARGS_INITIAL_SCALE=8,
     OBJ_ARGS_HAS_CUSTOM_OBJ_FLAGS = 16,
+    OBJ_ARGS_INITIAL_MASS = 32
 };
 
 enum EnumUrdfArgsUpdateFlags
@@ -110,6 +111,7 @@ struct ObjArgs
     double m_initialPosition[3];
     double m_initialOrientation[4];
     double m_initialScale[3];
+    double m_initialMass;
     int m_objFlags;
 };
 

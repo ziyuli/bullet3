@@ -342,6 +342,7 @@ B3_SHARED_API b3SharedMemoryCommandHandle	b3InitResetSimulationCommand(b3Physics
 // Load a model from a OBJ file
 B3_SHARED_API b3SharedMemoryCommandHandle b3LoadObjCommandInit(b3PhysicsClientHandle physClient, const char* objFileName);
 B3_SHARED_API int b3LoadObjCommandSetFlags(b3SharedMemoryCommandHandle commandHandle, int flags);
+B3_SHARED_API int b3LoadObjCommandSetMass(b3SharedMemoryCommandHandle commandHandle, double mass);
 B3_SHARED_API int b3LoadObjCommandSetStartPosition(b3SharedMemoryCommandHandle commandHandle, double startPosX,double startPosY,double startPosZ);
 B3_SHARED_API int b3LoadObjCommandSetStartOrientation(b3SharedMemoryCommandHandle commandHandle, double startOrnX,double startOrnY,double startOrnZ, double startOrnW);
 B3_SHARED_API int b3LoadObjCommandSetStartScale(b3SharedMemoryCommandHandle commandHandle, double startSclX,double startSclY,double startSclZ);
