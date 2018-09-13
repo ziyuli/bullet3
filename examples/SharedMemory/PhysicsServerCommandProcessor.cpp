@@ -3112,9 +3112,9 @@ bool PhysicsServerCommandProcessor::loadObj(const char* fileName, const btVector
 	        }
 	        
 	        btScalar mass = mas;
-	        btVector3 localInertiaDiagonal(0,0,0);
+	        btVector3 localInertiaDiagonal(0,3,0);
 
-	        o2b.getMassAndInertia2(-1, mass,localInertiaDiagonal,bodyHandle->m_rootLocalInertialFrame,0);
+	        //o2b.getMassAndInertia2(-1, mass,localInertiaDiagonal,bodyHandle->m_rootLocalInertialFrame,0);
 
 	        btRigidBody::btRigidBodyConstructionInfo rbci(mass, 0, o2b.getCollisionShape(), localInertiaDiagonal);
 	        rbci.m_startWorldTransform = rootTrans;
