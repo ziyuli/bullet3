@@ -53,6 +53,46 @@ B3_SHARED_API b3SharedMemoryCommandHandle b3SaveWorldCommandInit(b3PhysicsClient
 	return (b3SharedMemoryCommandHandle) command;
 }
 
+B3_SHARED_API b3SharedMemoryCommandHandle b3LoadTerrainCommandInit(b3PhysicsClientHandle physClient, void* heightMapData, const int gridSize,
+      const int realSize, const double heightScale, const double heightMin, const double heightMax, const int up)
+{
+	PhysicsClient* cl = (PhysicsClient* ) physClient;
+    b3Assert(cl);
+    b3Assert(cl->canSubmitCommand());
+
+    if(cl->canSubmitCommand())
+    {	
+        struct SharedMemoryCommand* command = cl->getAvailableSharedMemoryCommand();
+        b3Assert(command);
+        command->m_type = CMD_LOAD_TERRAIN;
+        if (gridSize * gridSize < MAX_TERRAIN_DATA_LENGTH && heightMapData != NULL) 
+        {
+            command->m_terrainArguments.m_terrainData = heightMapData;
+            command->m_terrainArguments.m_terrainGridSize = gridSize;
+            command->m_terrainArguments.m_terrainSize = realSize;
+            command->m_terrainArguments.m_terrainUp = up;
+            command->m_terrainArguments.m_terrainHeightScale = heightScale;
+            command->m_terrainArguments.m_terrainHeightMin = heightMin;
+            command->m_terrainArguments.m_terrainHeightMax = heightMax;
+        }
+        else
+        {
+            return 0;
+        }
+
+        command->m_updateFlags |= TERRAIN_ARGS_DATA;
+        command->m_updateFlags |= TERRAIN_ARGS_GRID_SIZE;
+        command->m_updateFlags |= TERRAIN_ARGS_SIZE;
+        command->m_updateFlags |= TERRAIN_ARGS_UP;
+        command->m_updateFlags |= TERRAIN_ARGS_HEIGHT_SCALE;
+        command->m_updateFlags |= TERRAIN_ARGS_HEIGHT_MIN;
+        command->m_updateFlags |= TERRAIN_ARGS_HEIGHT_MAX;
+
+        return (b3SharedMemoryCommandHandle)command;
+    }
+    return 0;
+}
+
 B3_SHARED_API int	b3LoadObjCommandSetFlags(b3SharedMemoryCommandHandle commandHandle, int flags)
 {
 	struct SharedMemoryCommand* command = (struct SharedMemoryCommand*) commandHandle;
@@ -1955,6 +1995,11 @@ B3_SHARED_API int b3GetStatusBodyIndex(b3SharedMemoryStatusHandle statusHandle)
 	{
 			switch (status->m_type)
 			{
+				case CMD_TERRAIN_LOADING_COMPLETED:
+				{
+					bodyId = status->m_dataStreamArguments.m_bodyUniqueId;
+					break;
+				}
 				case CMD_OBJ_LOADING_COMPLETED:
 				{
 					bodyId = status->m_dataStreamArguments.m_bodyUniqueId;

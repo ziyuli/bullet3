@@ -113,7 +113,7 @@ struct BulletErrorLogger : public ErrorLogger
 	virtual void reportWarning(const char* warning)
 	{
 		m_numWarnings++;
-		b3Warning(warning);
+		//b3Warning(warning);
 	}
 	
 	virtual void printMessage(const char* msg)

@@ -38,6 +38,8 @@
 #define MAX_NUM_LINKS MAX_DEGREE_OF_FREEDOM
 #define MAX_USER_DATA_KEY_LENGTH MAX_URDF_FILENAME_LENGTH
 
+// terrain
+#define MAX_TERRAIN_DATA_LENGTH (1024*1024)
 
 struct TmpFloat3 
 {
@@ -103,6 +105,29 @@ enum EnumUrdfArgsUpdateFlags
 	URDF_ARGS_USE_FIXED_BASE=16,
 	URDF_ARGS_HAS_CUSTOM_URDF_FLAGS = 32,
 	URDF_ARGS_USE_GLOBAL_SCALING =64,
+};
+
+// terrain
+struct TerrainArgs
+{
+	void* m_terrainData;
+	int m_terrainGridSize;
+	int m_terrainSize;
+	int m_terrainUp;
+	double m_terrainHeightScale;
+	double m_terrainHeightMin;
+	double m_terrainHeightMax;
+};
+
+enum EnumTerrainArgsUpdateFlags
+{
+	TERRAIN_ARGS_DATA=1,
+	TERRAIN_ARGS_GRID_SIZE=2,
+	TERRAIN_ARGS_SIZE=4,
+	TERRAIN_ARGS_UP=8,
+	TERRAIN_ARGS_HEIGHT_SCALE=16,
+	TERRAIN_ARGS_HEIGHT_MIN=32,
+	TERRAIN_ARGS_HEIGHT_MAX=64,
 };
 
 struct ObjArgs
@@ -1048,6 +1073,7 @@ struct SharedMemoryCommand
 
     union
     {
+    	struct TerrainArgs m_terrainArguments;
         struct ObjArgs m_objArguments;
         struct UrdfArgs m_urdfArguments;
 		struct SdfArgs m_sdfArguments;

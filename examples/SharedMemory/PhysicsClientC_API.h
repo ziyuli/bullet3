@@ -338,7 +338,14 @@ B3_SHARED_API b3SharedMemoryCommandHandle	b3InitStepSimulationCommand(b3PhysicsC
 
 B3_SHARED_API b3SharedMemoryCommandHandle	b3InitResetSimulationCommand(b3PhysicsClientHandle physClient);
 
-    
+
+// Load terrain from heightmap
+B3_SHARED_API b3SharedMemoryCommandHandle b3LoadTerrainCommandInit(b3PhysicsClientHandle physClient, 
+      void* heightMapData, 
+      const int gridSize, const int realSize, 
+      const double heightScale, const double heightMin, const double heightMax, 
+      const int up);
+
 // Load a model from a OBJ file
 B3_SHARED_API b3SharedMemoryCommandHandle b3LoadObjCommandInit(b3PhysicsClientHandle physClient, const char* objFileName);
 B3_SHARED_API int b3LoadObjCommandSetFlags(b3SharedMemoryCommandHandle commandHandle, int flags);

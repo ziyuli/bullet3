@@ -74,6 +74,13 @@
 #include "BulletDynamics/Featherstone/btMultiBodyDynamicsWorld.h"
 #endif
 
+#include "BulletCollision/CollisionShapes/btHeightfieldTerrainShape.h"
+#include "BulletCollision/CollisionShapes/btTriangleShape.h"
+#include "BulletCollision/CollisionShapes/btTriangleIndexVertexMaterialArray.h"
+#include "BulletCollision/CollisionShapes/btMultimaterialTriangleMeshShape.h"
+#include "BulletCollision/CollisionShapes/btMaterial.h"
+#include "BulletCollision/CollisionDispatch/btCollisionObjectWrapper.h"
+
 extern bool gJointFeedbackInWorldSpace;
 extern bool gJointFeedbackInJointFrame;
 
@@ -2971,6 +2978,69 @@ bool PhysicsServerCommandProcessor::loadSdf(const char* fileName, char* bufferSe
     return loadOk;
 }
 
+bool PhysicsServerCommandProcessor::loadTerrain(const void* data, const int gridSize, const int size, const double heightScale, 
+		const double heightMin, const double heightMax, const int up, 
+		int* bodyUniqueIdPtr, char* bufferServerToClient, int bufferSizeInBytes)
+{
+	*bodyUniqueIdPtr = -1;
+
+	BT_PROFILE("loadTerrain");
+    btAssert(m_data->m_dynamicsWorld);
+    if (!m_data->m_dynamicsWorld)
+    {
+        b3Error("loadTerrain: No valid m_dynamicsWorld");
+        return false;
+    }
+
+    btHeightfieldTerrainShape *heightFieldShape 
+    		= new btHeightfieldTerrainShape(gridSize, gridSize, data, heightScale,
+    		 								heightMin, heightMax, up, PHY_FLOAT, false);
+
+    heightFieldShape->setMargin(0.02f);
+    heightFieldShape->setUseDiamondSubdivision(true);
+    heightFieldShape->setLocalScaling(btVector3((float)size / (gridSize - 1), 1.0, (float)size / (gridSize - 1)));
+
+    btTransform rootTrans;
+    rootTrans.setIdentity();
+    rootTrans.setOrigin(btVector3(0.5 * size, 0.5 * (heightMax - heightMin) + heightMin, 0.5 * size));
+
+    btRigidBody * rb = 0;
+    int bodyUniqueId = m_data->m_bodyHandles.allocHandle();
+    InternalBodyHandle * bodyHandle = m_data->m_bodyHandles.getHandle(bodyUniqueId);
+    bodyHandle->m_rootLocalInertialFrame.setIdentity();
+    bodyHandle->m_bodyName = "terrain";
+
+    SaveWorldObjectData sd;
+    sd.m_fileName = "";
+    sd.m_bodyUniqueIds.push_back(bodyUniqueId);
+
+    btRigidBody::btRigidBodyConstructionInfo rbci(0, 0, heightFieldShape, btVector3(0,0,0));
+    rb = new btRigidBody(rbci);
+    rb->setWorldTransform(rootTrans);
+    rb->forceActivationState(DISABLE_DEACTIVATION);
+    rb->setCollisionFlags(rb->getCollisionFlags() | btCollisionObject::CF_STATIC_OBJECT);
+    rb->setFriction(0.5);
+
+    m_data->m_dynamicsWorld->addRigidBody(rb);
+
+    rb->setUserIndex2(bodyUniqueId);
+    bodyHandle->m_rigidBody = rb;
+    
+    std::string * name = new std::string("terrain");
+    m_data->m_strings.push_back(name);
+    bodyHandle->m_bodyName = *name;
+    
+    m_data->m_saveWorldBodyData.push_back(sd);
+    
+    *bodyUniqueIdPtr = bodyUniqueId;
+    btCollisionShape* shape = heightFieldShape;
+    m_data->m_collisionShapes.push_back(shape);
+
+    btVector3 aabb_min, aabb_max;
+    heightFieldShape->getAabb(rootTrans, aabb_min, aabb_max);
+
+    return true;
+}
 
 bool PhysicsServerCommandProcessor::loadObj(const char* fileName, const btVector3& pos, const btQuaternion& orn, const btVector3& scl, const double mas, int* bodyUniqueIdPtr, char* bufferServerToClient, int bufferSizeInBytes, int flags)
 {
@@ -6514,6 +6584,83 @@ bool PhysicsServerCommandProcessor::processCreateMultiBodyCommand(const struct S
 		//ConvertURDF2Bullet(u2b,creation, rootTrans,m_data->m_dynamicsWorld,useMultiBody,u2b.getPathPrefix(),flags);
 	}
 	return hasStatus;
+}
+
+bool PhysicsServerCommandProcessor::processLoadTerrainCommand(const struct SharedMemoryCommand& clientCmd, struct SharedMemoryStatus& serverStatusOut, char* bufferServerToClient, int bufferSizeInBytes) {
+	bool hasStatus = true;
+    serverStatusOut.m_type = CMD_TERRAIN_LOADING_FAILED;
+
+    const TerrainArgs& terrainArgs = clientCmd.m_terrainArguments;
+    if (m_data->m_verboseOutput)
+    {
+        b3Printf("Processed CMD_LOAD_TERRAIN");
+    }
+
+    btAssert((clientCmd.m_updateFlags & TERRAIN_ARGS_DATA) !=0);
+
+    const void* terrainData;
+    int terrainGridSize = 129;
+    int terrainSize = 10;
+    int terrainUp = 1;
+    double terrainHeightScale = 1.0;
+    double terrainHeightMin = -2.0;
+    double terrainHeightMax = 2.0;
+
+    if (clientCmd.m_updateFlags & TERRAIN_ARGS_DATA)
+    {
+    	terrainData = terrainArgs.m_terrainData;
+    }
+
+    if (clientCmd.m_updateFlags & TERRAIN_ARGS_GRID_SIZE)
+    {
+    	terrainGridSize = terrainArgs.m_terrainGridSize;
+    }
+
+    if (clientCmd.m_updateFlags & TERRAIN_ARGS_SIZE)
+    {
+    	terrainSize = terrainArgs.m_terrainSize;
+    }
+
+    if (clientCmd.m_updateFlags & TERRAIN_ARGS_UP)
+    {
+    	terrainUp = terrainArgs.m_terrainUp;
+    }
+
+    if (clientCmd.m_updateFlags & TERRAIN_ARGS_HEIGHT_SCALE)
+    {
+    	terrainHeightScale = terrainArgs.m_terrainHeightScale;
+    }
+
+    if (clientCmd.m_updateFlags & TERRAIN_ARGS_HEIGHT_MIN)
+    {
+    	terrainHeightMin = terrainArgs.m_terrainHeightMin;
+    }
+
+    if (clientCmd.m_updateFlags & TERRAIN_ARGS_HEIGHT_MAX)
+    {
+    	terrainHeightMax = terrainArgs.m_terrainHeightMax;
+    }
+
+    int bodyUniqueId;
+    bool completedOk = loadTerrain(terrainData, terrainGridSize, terrainSize, terrainHeightScale, 
+                               	   terrainHeightMin, terrainHeightMax, terrainUp,
+                               	   &bodyUniqueId, bufferServerToClient, bufferSizeInBytes);
+   
+
+    if (completedOk && bodyUniqueId>=0)
+    {
+        serverStatusOut.m_type = CMD_TERRAIN_LOADING_COMPLETED;
+        
+        int streamSizeInBytes = createBodyInfoStream(bodyUniqueId, bufferServerToClient, bufferSizeInBytes);
+        serverStatusOut.m_numDataStreamBytes = streamSizeInBytes;
+        
+        serverStatusOut.m_dataStreamArguments.m_bodyUniqueId = bodyUniqueId;
+        InternalBodyData* body = m_data->m_bodyHandles.getHandle(bodyUniqueId);
+        strcpy(serverStatusOut.m_dataStreamArguments.m_bodyName, body->m_bodyName.c_str());
+        
+        return true;
+    }
+    return false;
 }
 
 bool PhysicsServerCommandProcessor::processLoadOBJCommand(const struct SharedMemoryCommand& clientCmd, struct SharedMemoryStatus& serverStatusOut, char* bufferServerToClient, int bufferSizeInBytes)
@@ -10077,6 +10224,11 @@ bool PhysicsServerCommandProcessor::processCommand(const struct SharedMemoryComm
 		{
 			hasStatus = processSetAdditionalSearchPathCommand(clientCmd,serverStatusOut,bufferServerToClient, bufferSizeInBytes);
 			break;
+		}
+	case CMD_LOAD_TERRAIN:
+		{
+			hasStatus = processLoadTerrainCommand(clientCmd,serverStatusOut,bufferServerToClient, bufferSizeInBytes);
+            break;
 		}
     case CMD_LOAD_OBJ:
         {

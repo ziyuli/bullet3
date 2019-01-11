@@ -25,7 +25,7 @@ class PhysicsServerCommandProcessor : public CommandProcessorInterface
 
 protected:
 
-
+	bool processLoadTerrainCommand(const struct SharedMemoryCommand& clientCmd, struct SharedMemoryStatus& serverStatusOut, char* bufferServerToClient, int bufferSizeInBytes);
     bool processLoadOBJCommand(const struct SharedMemoryCommand& clientCmd, struct SharedMemoryStatus& serverStatusOut, char* bufferServerToClient, int bufferSizeInBytes);
 	bool processStateLoggingCommand(const struct SharedMemoryCommand& clientCmd, struct SharedMemoryStatus& serverStatusOut, char* bufferServerToClient, int bufferSizeInBytes);
 	bool processRequestCameraImageCommand(const struct SharedMemoryCommand& clientCmd, struct SharedMemoryStatus& serverStatusOut, char* bufferServerToClient, int bufferSizeInBytes);
@@ -97,6 +97,9 @@ protected:
 	bool loadUrdf(const char* fileName, const class btVector3& pos, const class btQuaternion& orn,
 		bool useMultiBody, bool useFixedBase, int* bodyUniqueIdPtr, char* bufferServerToClient, int bufferSizeInBytes, int flags, btScalar globalScaling);
     
+	bool loadTerrain(const void* data, const int gridSize, const int size, const double heightScale, 
+		const double heightMin, const double heightMax, const int up, int* bodyUniqueIdPtr, char* bufferServerToClient, int bufferSizeInBytes);
+
     bool loadObj(const char* fileName, const class btVector3& pos, const class btQuaternion& orn, const class btVector3& scl, const double mas,
         int* bodyUniqueIdPtr, char* bufferServerToClient, int bufferSizeInBytes, int flags);
 
